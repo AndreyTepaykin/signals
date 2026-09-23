@@ -1,0 +1,20 @@
+# Python
+api/.venv/
+api/.env
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / Angular
+web/node_modules/
+web/dist/
+web/.angular/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+*.log
+.env
+*.local

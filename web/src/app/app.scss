@@ -1,0 +1,55 @@
+:host {
+  display: block;
+  min-height: 100vh;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  color: #1a1a1a;
+  background: #f6f4f1;
+}
+
+.shell {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 3rem 1.25rem;
+}
+
+h1 {
+  margin: 0 0 0.35rem;
+  font-size: 2rem;
+  letter-spacing: -0.02em;
+}
+
+.lede {
+  margin: 0 0 1.5rem;
+  color: #555;
+}
+
+.status {
+  margin: 0 0 0.75rem;
+  font-weight: 600;
+}
+
+.status.ok {
+  color: #1b6b3a;
+}
+
+.status.error {
+  color: #9b1c1c;
+}
+
+.meta {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: #333;
+  line-height: 1.6;
+}
+
+.hint {
+  margin: 0.75rem 0 0;
+  font-size: 0.9rem;
+  color: #555;
+}
+
+code {
+  font-size: 0.85em;
+  word-break: break-all;
+}

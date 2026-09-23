@@ -1,0 +1,17 @@
+<main class="shell">
+  <h1>{{ title() }}</h1>
+  <p class="lede">Self-learning crypto signals — local scaffold</p>
+
+  @if (isLoading()) {
+    <p class="status">Checking API…</p>
+  } @else if (healthError()) {
+    <p class="status error">API health failed: {{ healthError() }}</p>
+    <p class="hint">Start the API from <code>repo\api</code>: <code>.venv\Scripts\uvicorn app.main:app --reload --port 8000</code></p>
+  } @else if (health(); as h) {
+    <p class="status ok">API {{ h.status }}</p>
+    <ul class="meta">
+      <li>Database: {{ h.database }}</li>
+      <li>Postgres: {{ h.postgres }}</li>
+    </ul>
+  }
+</main>
