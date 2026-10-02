@@ -13,7 +13,13 @@ def get_engine() -> AsyncEngine:
     global _engine, _session_factory
     if _engine is None:
         settings = get_settings()
-        _engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+        _engine = create_async_engine(
+            settings.database_url,
+            pool_pre_ping=True,
+            # asyncpg already returns timestamptz as UTC-aware datetimes, but SQL that depends on the
+            # session zone (date_trunc, ::date, extract, to_char) would still follow the server's.
+            connect_args={'server_settings': {'timezone': 'UTC'}},
+        )
         _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
     return _engine
 
