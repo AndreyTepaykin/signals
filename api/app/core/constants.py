@@ -132,7 +132,7 @@ SWING_TIMEFRAME = '4h'
 SWING_FRACTAL_BARS = 2
 CHANDELIER_ATR_MULT = 3.0
 
-# ATR period is NOT stated in the spec. ASSUMPTION (flagged in BUILD-LOG):
+# ATR period is NOT stated in the spec. Owner-confirmed rather than assumption (M3 brief):
 # Wilder ATR over 14 bars of the timeframe the stop/gate is computed on.
 ATR_PERIOD = 14
 

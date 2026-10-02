@@ -468,3 +468,105 @@ Existing rows were corrected in place (a re-fetch cannot change a stored timesta
 - **Left behind in `public`** (kept as evidence): 1,002 candles (BTCUSDT: perp and spot at 15m/1h/4h; 990 from the backfill, 12 from the later `--once` run), 974 OI rows (968 corrected in place, 6 written by the later `--once` run), 3 settled and 1 predicted funding row, 11 `feed_health` rows, 13 `job_run` rows (3 `backfill`, 10 from two `--once` runs). 0 force orders.
 - **After the publication-lag and UTC corrections** (live, 2026-10-02 18:24 UTC, `WATCHLIST=BTCUSDT python -m app.worker --once --no-stream`): every job `ok`; the newest OI rows were boundary 18:15 (15m) and 18:00 (1h), the newest knowable at 18:24:33 (18:15 + 300 s = 18:20); all 11 BTC `feed_health` rows `ok` with the limits unchanged. SQL over `public`: `open_interest` 968+ rows, 0 with `available_at = poll_time`, 0 with `available_at <> poll_time + 300 s`, 0 in the future; settled `funding` 3 rows, 0 optimistic, all at +30 s; `candle` 990 rows, all `available_at = close_time`; session `SHOW timezone` = `UTC`.
 - The test suite runs in a throwaway schema, so none of it touched `public`.
+
+---
+
+## M3 - Feature engine
+
+- Date: 2026-10-02
+- Model: Claude Sonnet 5.5
+
+### Files created or modified
+Source (`repo/api/app/core/features/`, all pure: no database, no clock, no environment):
+- `__init__.py` - package index.
+- `params.py` - engine choices the spec leaves open (timeframes, history lengths, `HistoryPolicy`), deliberately NOT in `constants.py` (see Deviations).
+- `series.py` - frozen carriers (`Bar`, `OIPoint`, `FundingPrint`, `ForcePrint`, `CalendarEvent`, `Sample`) and the `available_at` visibility filter every pure function applies.
+- `reading.py` - `Reading(value, reason)`: a missing value must carry a reason; a non-finite float cannot be built.
+- `stats.py` - mean/std, `prior_window` (the one causal-window rule), `trailing_zscore`, `trailing_percentile`, `ols`.
+- `volatility.py` - true range, Wilder ATR, Yang-Zhang (annualised), hourly realized-vol samples.
+- `trend.py` - Kaufman efficiency and the derived (stateless) trend/chop family.
+- `positioning.py` - aggressor imbalance, OI-price quadrant, funding z and carry, perp basis, perp/spot disagreement.
+- `indicators.py` - CVD divergence, Bollinger/Keltner squeeze, Wilder RSI, pullback reset.
+- `levels.py` - session and anchored VWAP, volume profile (POC, value area), 4h fractal swings, chandelier.
+- `cross_asset.py` - lagged rolling OLS beta of an alt on BTC and the signal-bar residual z.
+- `liquidation.py` - the shadow liquidation estimate and print rate (into `shadow_metrics` only).
+- `columns.py` - the 53 feature columns with kind/precision/scale, and the normaliser (rounds to the column scale BEFORE hashing).
+- `assemble.py` - `FeatureInputs` -> `compute_features` -> values, NULL reasons and `feature_hash`.
+
+Worker and tests:
+- `repo/api/app/worker/feature_job.py` - the assembly job: reads every feed through `as_of`, computes, writes one `feature_row` per horizon idempotently; CLI.
+- `repo/api/app/core/constants.py` - comment only on `ATR_PERIOD` ("owner-confirmed rather than assumption"); no value changed, `rule_hash()` unchanged.
+- `repo/api/tests/feature_helpers.py` - hand-built bars, a seeded 100-day synthetic market, future-poisoning and newest-print-nudge helpers.
+- `repo/api/tests/test_features_golden.py` (118) - hand-computed fixtures with the working in comments.
+- `repo/api/tests/test_features_causality.py` (39) - per-statistic early / late / poisoned-future equality, plus a positive control.
+- `repo/api/tests/test_features_determinism.py` (14) - hash repeats, key order, input order, other process/hash-seed/TZ, no clock, sensitivity.
+- `repo/api/tests/test_features_null.py` (26) - unavailable input is NULL with a reason; a real zero stays zero.
+- `repo/api/tests/test_features_columns.py` (68) - registry equals the model (names, order, precision/scale), ATR-unit naming, normalisation.
+- `repo/api/tests/test_feature_job.py` (17) - as-of source scan and wire-level check, idempotence, hash round trip through Postgres, readiness, live carry band.
+- `repo/docs/BUILD-LOG.md` - this entry.
+
+### Contracts frozen
+Module paths, names and signatures M4 and later use verbatim:
+- `app.core.features.assemble.compute_features(inputs: FeatureInputs, policy: HistoryPolicy = PRODUCTION_POLICY) -> FeatureComputation`. `FeatureComputation.values` has EXACTLY the keys of `columns.FEATURE_COLUMNS` (53, `None` = NULL), `.reasons` maps each NULL column to a sentence (diagnostic, not stored, not hashed), `.feature_hash = app.core.hashing.feature_hash(values)`.
+- `FeatureInputs(coin, bar_close, horizon, source, perp_15m, spot_15m, perp_1h, spot_1h, perp_4h, btc_perp_15m=None, is_reference_coin=False, oi_1h=(), funding_settled=(), funding_predicted=None, force_orders=(), events=(), calendar_loaded=False)`. Lists need not be sorted or filtered.
+- `app.worker.feature_job.assemble_feature_rows(session, coin, bar_close, *, source='live', horizons=C.HORIZONS, observed_at=None, now=None, code_version=None, policy=PRODUCTION_POLICY, require_ready=None) -> AssemblyReport`; `load_inputs(...)`; `run_feature_job(session, coins, *, now=None)`; `latest_closed_bar(now)`; `InputsNotReady`; CLI `python -m app.worker.feature_job --coins BTCUSDT[,..] [--at ISO] [--source live|replay] [--dry-run]`.
+- `feature_row` is keyed `(coin, horizon, signal_timeframe='15m', bar_close, source)` (`uq_feature_row_series_bar_close`); the job inserts `ON CONFLICT DO NOTHING`. Rows are immutable; a re-run that computes a different hash for an existing row is counted in `AssemblyReport.hash_mismatches` and logged, never overwritten.
+- **The stored row reproduces its own `feature_hash`**: every float is rounded to its column scale before hashing, and `float(Decimal)` from the database is the same double. Reading a row back as `{column: float(Decimal) | value}` and calling `feature_hash` returns `row.feature_hash` (tested through Postgres).
+- Column semantics a rule may rely on:
+  - Every `*_atr` column is `(price - level) / atr_price`, POSITIVE when price is ABOVE the level, in units of the 4h Wilder ATR(14) stored in `atr_price` (`atr_timeframe = '4h'`). `chandelier_stop_distance_atr` is positive on the protective side (<= 0 means the stop is breached). `perp_spot_disagreement_atr` is an absolute value.
+  - `trend_family` is NULL on a cold start (see Cold start) and a rule that needs a family does not fire on NULL.
+  - `event_flag` / `active_event_kinds` are NULL when no calendar row is loaded ("unknown"), `false` / `[]` when a calendar is loaded and no window is active.
+  - `funding_rate_current` and `funding_carry_bps_horizon` are filled ONLY for `source='live'` (and only with a stated settlement interval); a `replay` row has them NULL by design.
+  - `swing_break` is false and the direction NULL when no swing is broken; `chandelier_*` are NULL then (the stop is defined for a break direction).
+  - `cme_basis_z`, `etf_net_flow_z`, `ibit_dealer_gamma_sign`, `cme_dealer_gamma_sign` are always NULL.
+  - `shadow_metrics` is `{}` when unknown; keys `liquidation_distance_atr`, `liquidation_distance_estimated`, `liquidation_print_rate_per_min` only.
+- Public pure functions the later milestones reuse: `volatility.yang_zhang_vol(window, step)` (any window length: M5's same-tenor realized vol), `volatility.wilder_atr`, `levels.fractal_swings`, `levels.chandelier_stop`, `stats.trailing_zscore`, `stats.trailing_percentile`, `stats.prior_window`, `params.HistoryPolicy`.
+- How each feature is computed (formula, column) is in the module docstrings and the report below.
+
+### Deferred to a later milestone
+- Scheduling `run_feature_job` in `app.worker` (the scheduler module is M2's ingest code and was not touched) -> M4 or M10; until then it runs by CLI or by a caller.
+- Frozen rules, direction vote, options check -> M4/M5. Labeler and the label-only features (hold-period residual, cross-market impulse) -> M6. Replay driver that fills `feature_row` for history -> M7.
+- A tenor-matched realized vol for rank 10 -> M5 (use `yang_zhang_vol` on the tenor's bars).
+- Feeds that fill the four always-NULL columns and `iv_*`/book shadow keys -> after Phase 1.
+- Calendar rows (CPI, FOMC, expiry): the table is empty on the real database, so `event_flag` is NULL there -> whichever milestone loads the calendar (the spec lists CPI, FOMC and expiry); not decided here.
+
+### Deviations from the plan
+- **Engine choices are in `app/core/features/params.py`, not `constants.py`.** Adding an UPPERCASE name to `constants.py` moves `rule_hash()`; the brief said no constant moves in M3. Consequence: changing a `params.py` value changes feature VALUES (and `feature_hash`) without changing `rule_hash`. `code_version` is what distinguishes those builds, and it only means something once the tree is committed (`25aec17-dirty` while it is not). Decision for the owner at M4: promote `params.py` into `constants.py` and accept a one-time `rule_hash` change.
+- **The assembly job is not registered with the scheduler** (M2 code is out of bounds). See Deferred.
+- **`cvd_divergence_against` is NULL when there is no divergence**, and says why (found by the NULL tests: a NULL with no reason). It is the true value, not a gap.
+- **A real bug found by the DB tests and fixed in this milestone:** SQLAlchemy sends Python `None` for a JSONB column as the JSON value `null`, not SQL NULL, which violates `ck_feature_row_active_event_kinds_is_array` (and would have been a second spelling of "missing"). `to_db_value` now sends `sqlalchemy.null()` for the JSONB columns. A test asserts `active_event_kinds IS NULL` in SQL.
+- **Staleness is NULL, not carry-forward.** A series whose newest visible bar is not the bar that should be newest at `bar_close` (a stopped 1h feed, a late 4h bar, OI older than two periods, funding older than 16 h) gives NULL for the features built on it. The brief did not ask; the alternative is a current-looking number built on the previous bar. Together with the live readiness check (`InputsNotReady` for ten minutes, then write with NULLs) this is why a row is never keyed on bar T over statistics from bar T-1.
+- **A minimum history for every 90-day statistic** (`HistoryPolicy`: prior samples must span 7 days and number 30, else NULL). The spec gives no minimum; without one a z-score over 25 hours would be quoted as a 90-day z-score.
+
+### Ambiguities (spec quotes and choices)
+Each: the quoted line, the choice, and the milestone that confirms it.
+1. **Session VWAP reset.** "Session VWAP in UTC". Reset at 00:00 UTC (the UTC day of the bar's OPEN, so the bar closing at exactly 00:00 belongs to the day that ended); NOT at the Asia/Europe/US bucket edges (that is the regime slice's `session`). Typical price (H+L+C)/3 times base volume. Fewer than 8 bars into the day -> NULL. Confirms: M4 (the VWAP tag trigger).
+2. **The "2-bar fractal".** "A 4h close beyond the last 2-bar fractal swing". Two bars on EACH side, strict: a swing needs two later 4h bars, so the newest two bars can never be the last swing. "Beyond" means a close strictly beyond. If a close is beyond both swings, the more recent swing decides. Confirms: M4.
+3. **Sampling frequency behind each z-score.** "Every rate is a 90-day z-score or percentile". Aggressor imbalance and the alt residual: per 15m bar (<= 8,640 samples). OI change, perp basis, realized vol: hourly (<= 2,160). Funding: one per SETTLED print (~270). Every statistic scores the current value against the PRIOR window (strictly before the bar, excluding the current). Confirms: M7 (first time a full 90 days exists).
+4. **Volume-profile session and early-session behaviour.** "Session profile, 50 bins, 70% value area". Same 00:00 UTC session as the VWAP; 50 equal bins over the session low..high; a bar's volume is spread across its range by overlap; POC ties go to the lowest bin and is the bin centre; the value area grows from the POC by the larger neighbouring bin (ties: above) to >= 70%, and its low/high are bin EDGES (single-bin expansion, not the Market Profile two-row rule). Fewer than 8 session bars -> NULL for POC, value area and every distance. Confirms: M4.
+5. **ATR timeframe.** "Every distance is stored in ATR units". The ATR is the 4h Wilder ATR(14), because the stop (chandelier) and the swing are 4h objects. `ATR_PERIOD = 14` is owner-confirmed. Confirms: M4.
+6. **Yang-Zhang window and annualisation.** "Yang-Zhang vol versus 90 days". 24 consecutive 1h bars per estimate (25 are read), sliding hourly; the percentile ranks the current estimate among the prior 90 days of such overlapping estimates (so adjacent samples are strongly correlated and the effective sample count is far below the nominal one). Annualised with 365 days. Confirms: M5 (same-tenor IV minus realized needs the same convention).
+7. **OI period.** "Price up and OI up = new risk ... Four states". Six states (the four quadrants plus `price_up_oi_flat` and `price_down_oi_flat`; owner-confirmed, not reopened), computed on the 1h OI series over one period against the price change over the same hour; dead zone 0.25 sigma of the prior 90-day one-period OI changes. A reading older than two periods is NULL. Confirms: M4.
+8. **Trend family "keep the previous family".** Stateless: the most recent decisive reading (>= 0.40 or <= 0.25) among the last 336 hourly readings. See Cold start. Confirms: M4/M7.
+9. **CVD "price makes a 20-bar high or low".** Close strictly beyond the prior 19 closes; "CVD does not" = the cumulative line is not strictly beyond its own prior-19 extreme. Confirms: M4.
+10. **Pullback reset three-valued.** NULL when the family is trend but RSI or VWAP cannot be read and nothing else triggers; FALSE when the family is chop. Confirms: M4.
+11. **Residual "on the signal bar".** The beta fit uses returns that ended at or before the signal bar's OPEN (the signal bar's own return is excluded, which is the lag); `beta_fit_end = bar_close - 15m`. Confirms: M4.
+
+### Report (the eight points)
+
+**Causality.** Every window goes through `stats.prior_window`: `available_at <= as_of` and `bar_close - 90d <= t < t_current` (strictly before, excluding the observation scored); no function receives a full-sample or centred statistic; `series.visible` re-applies `available_at` in every pure function (two independent layers: the SQL gate and the filter). `test_features_causality.py` runs each rolling statistic three ways (truncated, full data evaluated at T, future made absurd) at ordinary, 4h and midnight bar closes and requires equality, requires the value not to be NULL, and has a positive control showing the newest print does move it.
+
+**Cold start, live and replay.** Wilder ATR and RSI always use the LAST 200 visible bars of a contiguous run (hence identical to the last bit however the process started). The trend family is derived from the data, not carried in memory: the most recent decisive hourly efficiency within the last 336 readings; none decisive, or the latest efficiency not computable -> NULL (never defaulted). Replay and live therefore agree by construction. Real BTCUSDT: the family is `chop` at 0.019.
+
+**Yang-Zhang.** Annualised. `k = 0.34 / (1.34 + (n+1)/(n-1))` with n = 24 (k = 0.14009316); `sigma2_yz = sigma2_o + k*sigma2_c + (1-k)*sigma2_rs` (overnight, open-to-close, Rogers-Satchell); `vol = sqrt(sigma2_yz * 8760)` for 1h bars (365 x 24). A fraction (0.42 = 42 %/year). Hand-computed n=2 test: variance 0.1033793388, annualised 30.0932385687.
+
+**Verification.** `cd repo/api; & '.\.venv\Scripts\python.exe' -m pytest` -> `780 passed in 140.78s` (498 existing + 282 new). Tree: only the files above are new or modified; nothing committed or pushed.
+
+**Real-data run** (BTCUSDT, replay source, production policy, bar close 2026-10-02 18:15 UTC, hash `33b81f0a54be035f1b197f1248e6bff7bbc15c32c32dd66bf329b85bc739c01d`): ATR(4h,14) 998.27; price 84,856.1; aggressor imbalance 0.6495; OI quadrant `price_down_oi_down`, OI-change z -0.87; trend efficiency 0.0191, family chop; YZ vol 41.84 %/yr at the 0.795 percentile; perp basis -3.43 bps (z 1.49); CVD delta -4,643; session VWAP -1.07 ATR; POC 86,436 (-1.58 ATR), value area 85,342..86,857; squeeze off (ratio 2.75); 4h swing break LONG against 84,379.8 (anchor 2026-10-01 04:00), last swing low 83,136.6; RSI 32.2; chandelier stop 84,254.8, distance 0.60 ATR; perp-spot disagreement 0.035 ATR. An independent re-implementation of efficiency (0.01908706), Yang-Zhang (0.4183731) and ATR (998.2663245) from the raw database bars agrees with the engine to the printed digits (this is a cross-check of the engine against a second implementation, not where any expected value in the tests came from).
+
+**NULL on the real data and why:** `aggressor_imbalance_z` (the database holds 1.0 day of 15m bars, the policy wants 7); `funding_z` (3 settled prints); `swing_vwap_distance_atr` (the swing anchor 2026-10-01 08:00 predates the available 15m bars, which start 2026-10-01 17:15; the 4h series is 200 bars deep, the 15m series 100); `beta_vs_btc`, `beta_fit_end`, `alt_residual_z_signal_bar` (BTC is the reference); `funding_rate_current`, `funding_carry_bps_horizon` (replay row; a live row would read the predicted print); `event_flag`, `active_event_kinds` (the calendar table is empty); `shadow_metrics` `{}` (0 force orders); `cvd_divergence_against` (no divergence); the four always-NULL columns. A relaxed diagnostic policy (span 0.5 day, 5 samples; NOT production, not stored) gives `aggressor_imbalance_z` 1.75; `funding_z` stays NULL (2 prior samples).
+
+**Plausibility and an observation for M4.**
+- Vol: 41.8 %/yr is ordinary for BTC; the 0.795 percentile is among only 177 hourly samples spanning 7.4 days (the 1h history starts 2026-09-24), barely over the 7-day minimum, so treat it as provisional until M7 has the 90 days. The sample range is 13 % to 47 %.
+- Efficiency vs price: the last 25 hourly closes run 84,166 -> 86,769 and back to 84,746: net -120 on a 6,303 path, 0.019, correctly chop (a round trip). The current reading itself is decisive (<= 0.25), so the family is `chop` directly, not carried; the carry path (a reading between the bands) is exercised by the hand-built tests, not by this bar.
+- Chandelier: the 4h swing break is long (close above 84,379.8) and the post-break high is 87,249.6; price has since fallen 2.4 ATR from that high with RSI 32, so the stop sits only 0.60 ATR below price. **A "swing break" is a state ("the last close is beyond the last swing"), not an event ("this bar broke it").** `swing_break = true` here is about a day old. M4 must decide whether it triggers only on the bar of the break or on the state; this entry does not decide it. The short-direction chandelier (diagnostic) is 1.28 ATR.
