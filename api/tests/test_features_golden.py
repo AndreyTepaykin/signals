@@ -487,12 +487,16 @@ def test_volume_profile_production_parameters_match_the_spec():
 SWING_HL = [(10, 8), (11, 9), (15, 12), (12, 10), (11, 9), (13, 10), (14, 11), (12, 9), (13, 10), (13, 10)]
 
 
-def swing_bars(last_close):
+def swing_rows(last_close):
     rows = []
     for i, (h, l) in enumerate(SWING_HL):
         close = last_close if i == len(SWING_HL) - 1 else (h + l) / 2
         rows.append((l + 1, max(h, close), min(l, close), close, 1.0, 0.5))
-    return bars_from_rows(dt(2026, 1, 1), H4, rows)
+    return rows
+
+
+def swing_bars(last_close):
+    return bars_from_rows(dt(2026, 1, 1), H4, swing_rows(last_close))
 
 
 def test_fractal_swings_by_hand():
@@ -559,6 +563,60 @@ def test_no_swing_at_all_is_reported_not_guessed():
     bars = bars_from_rows(dt(2026, 1, 1), H4, [(i, i + 1, i - 1, i) for i in range(1, 10)])  # monotone: no fractal
     state, why = levels.swing_state(bars, bars[-1].close_time, H4)
     assert state is None and 'no confirmed' in why
+
+
+# ---------------------------------------------------------------------------
+# Swing break: event versus state (same swing bars; S = swing high 14 at index 6)
+#   bar 8 closes (13 + 10) / 2 = 11.5, not beyond 14.
+#   bar 9 closes 15.5 > 14              -> event (first close beyond S) and state.
+#   bar 10 closes 16 > 14, prev 15.5 > 14 -> state only, no event.
+#   bar 10 closes 13.5 < 14 (and > 9)   -> back through S: no state, no event.
+# Bar 10 is H16.5 L15 / H15.2 L13; with only one later bar, bar 9 cannot become a swing.
+# ---------------------------------------------------------------------------
+def test_the_first_4h_close_beyond_the_swing_is_the_event():
+    bars = swing_bars(15.5)
+    state, _ = levels.swing_state(bars, bars[-1].close_time, H4)
+    assert state.break_direction == 'long' and state.broken.price == 14
+    assert state.break_is_new is True
+    assert levels.swing_break_event(state, bars[-1].close_time) is True
+
+
+def test_the_event_fires_only_on_the_15m_bar_that_closes_the_breaking_4h_bar():
+    bars = swing_bars(15.5)
+    close = bars[-1].close_time
+    for later in (close + M15, close + M15 * 2, close + H4 - M15):  # still inside the next, unfinished 4h bar
+        state, _ = levels.swing_state(bars, later, H4)
+        assert state.run[-1].close_time == close  # same latest completed 4h bar
+        assert state.break_direction == 'long'  # the state carries on
+        assert levels.swing_break_event(state, later) is False
+
+
+def test_a_second_close_beyond_the_swing_is_state_without_event():
+    bars = bars_from_rows(dt(2026, 1, 1), H4, swing_rows(15.5) + [(15.5, 16.5, 15.0, 16.0, 1.0, 0.5)])
+    state, _ = levels.swing_state(bars, bars[-1].close_time, H4)
+    assert state.break_direction == 'long' and state.broken.index == 6
+    assert state.break_is_new is False
+    assert levels.swing_break_event(state, bars[-1].close_time) is False
+
+
+def test_a_close_back_through_the_swing_ends_the_state():
+    bars = bars_from_rows(dt(2026, 1, 1), H4, swing_rows(15.5) + [(15.0, 15.2, 13.0, 13.5, 1.0, 0.5)])
+    state, _ = levels.swing_state(bars, bars[-1].close_time, H4)
+    assert (state.last_high.price, state.last_low.price) == (14, 9)
+    assert state.break_direction is None and state.broken is None
+    assert state.break_is_new is False and levels.swing_break_event(state, bars[-1].close_time) is False
+
+
+def test_short_break_event_by_hand():
+    # S = swing low 9 at index 4; bar 8 closes 11.5 (not below 9), bar 9 closes 8 -> short event
+    bars = swing_bars(8.0)
+    state, _ = levels.swing_state(bars, bars[-1].close_time, H4)
+    assert state.break_direction == 'short' and state.broken.price == 9
+    assert levels.swing_break_event(state, bars[-1].close_time) is True
+    # a second close below 9 is state only
+    more = bars_from_rows(dt(2026, 1, 1), H4, swing_rows(8.0) + [(8.0, 8.5, 7.0, 7.5, 1.0, 0.5)])
+    state, _ = levels.swing_state(more, more[-1].close_time, H4)
+    assert state.break_direction == 'short' and state.break_is_new is False
 
 
 # ---------------------------------------------------------------------------

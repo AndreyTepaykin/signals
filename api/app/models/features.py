@@ -188,8 +188,18 @@ class FeatureRow(SurrogateKey, CreatedAt, Base):
         nullable=True,
         comment='Bollinger width over Keltner width; below 1 is a squeeze.',
     )
-    swing_break: Mapped[bool | None] = mapped_column(nullable=True, comment='4h close beyond the last 2-bar fractal.')
-    swing_break_direction: Mapped[str | None] = mapped_column(nullable=True, comment='long | short')
+    swing_break_state: Mapped[bool | None] = mapped_column(
+        nullable=True,
+        comment='4h close still beyond the broken 2-bar fractal swing and the chandelier stop not breached.',
+    )
+    swing_break_event: Mapped[bool | None] = mapped_column(
+        nullable=True,
+        comment='This 15m bar closes the first 4h close beyond the swing (the previous 4h close was not).',
+    )
+    swing_break_direction: Mapped[str | None] = mapped_column(
+        nullable=True,
+        comment='long | short: side of the 4h close beyond the swing.',
+    )
     last_swing_high: Mapped[Price | None] = mapped_column(nullable=True)
     last_swing_low: Mapped[Price | None] = mapped_column(nullable=True)
     swing_anchor_time: Mapped[datetime | None] = mapped_column(nullable=True)

@@ -29,7 +29,7 @@ from typing import Any
 from app.core import constants as C
 from app.core.features import cross_asset, indicators, levels, liquidation, positioning, trend, volatility
 from app.core.features import params as P
-from app.core.features.columns import ALWAYS_NULL, FEATURE_COLUMNS, normalise_mapping
+from app.core.features.columns import ALWAYS_NULL, FEATURE_COLUMNS, normalise_mapping, normalise_value
 from app.core.features.params import PRODUCTION_POLICY, HistoryPolicy, timeframe_delta
 from app.core.features.reading import Reading, missing
 from app.core.features.series import (
@@ -272,7 +272,8 @@ def compute_features(inputs: FeatureInputs, policy: HistoryPolicy = PRODUCTION_P
     if swings is None:
         put_many(
             (
-                'swing_break',
+                'swing_break_state',
+                'swing_break_event',
                 'swing_break_direction',
                 'last_swing_high',
                 'last_swing_low',
@@ -285,8 +286,12 @@ def compute_features(inputs: FeatureInputs, policy: HistoryPolicy = PRODUCTION_P
         )
         distance('swing_vwap_distance_atr', None, swing_reason or 'unavailable')
     else:
-        raw['swing_break'] = swings.break_direction is not None
-        raw['swing_break_direction'] = swings.break_direction
+        direction = swings.break_direction
+        raw['swing_break_event'] = levels.swing_break_event(swings, t)
+        if direction is not None:
+            raw['swing_break_direction'] = direction
+        else:
+            why['swing_break_direction'] = 'no 4h close beyond the last swing'
         if swings.last_high is not None:
             raw['last_swing_high'] = swings.last_high.price
         else:
@@ -304,13 +309,19 @@ def compute_features(inputs: FeatureInputs, policy: HistoryPolicy = PRODUCTION_P
             raw['swing_vwap_anchor_time'] = anchor.open_time
             anchored = levels.anchored_vwap(inputs.perp_15m, anchor.open_time, t, t, step15)
             distance('swing_vwap_distance_atr', anchored.value if anchored.ok else None, anchored.reason or 'unavailable')
-        if swings.broken is not None and swings.break_direction is not None and atr is not None and price is not None:
-            stop = levels.chandelier_stop(swings.run, swings.broken.index, swings.break_direction, atr)
+        if swings.broken is not None and direction is not None and atr is not None and price is not None:
+            stop = levels.chandelier_stop(swings.run, swings.broken.index, direction, atr)
+            room = normalise_value('chandelier_stop_distance_atr', levels.chandelier_distance_atr(price, stop, direction, atr))
             raw['chandelier_stop_price'] = stop
-            raw['chandelier_stop_distance_atr'] = levels.chandelier_distance_atr(price, stop, swings.break_direction, atr)
+            raw['chandelier_stop_distance_atr'] = room
+            raw['swing_break_state'] = room > 0.0
         else:
             why['chandelier_stop_price'] = 'no 4h swing break (the stop is defined for the break direction), or ATR / price unavailable'
             why['chandelier_stop_distance_atr'] = why['chandelier_stop_price']
+            if direction is None:
+                raw['swing_break_state'] = False
+            else:
+                why['swing_break_state'] = 'the 4h close is beyond the swing but the chandelier stop cannot be checked (ATR or price unavailable)'
 
     # ---- indicators: triggers -----------------------------------------------
     sq = indicators.squeeze(inputs.perp_15m, t, t, step15)

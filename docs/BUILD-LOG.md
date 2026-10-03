@@ -570,3 +570,67 @@ Each: the quoted line, the choice, and the milestone that confirms it.
 - Vol: 41.8 %/yr is ordinary for BTC; the 0.795 percentile is among only 177 hourly samples spanning 7.4 days (the 1h history starts 2026-09-24), barely over the 7-day minimum, so treat it as provisional until M7 has the 90 days. The sample range is 13 % to 47 %.
 - Efficiency vs price: the last 25 hourly closes run 84,166 -> 86,769 and back to 84,746: net -120 on a 6,303 path, 0.019, correctly chop (a round trip). The current reading itself is decisive (<= 0.25), so the family is `chop` directly, not carried; the carry path (a reading between the bands) is exercised by the hand-built tests, not by this bar.
 - Chandelier: the 4h swing break is long (close above 84,379.8) and the post-break high is 87,249.6; price has since fallen 2.4 ATR from that high with RSI 32, so the stop sits only 0.60 ATR below price. **A "swing break" is a state ("the last close is beyond the last swing"), not an event ("this bar broke it").** `swing_break = true` here is about a day old. M4 must decide whether it triggers only on the bar of the break or on the state; this entry does not decide it. The short-direction chandelier (diagnostic) is 1.28 ATR.
+
+---
+
+## M3.1 - Pre-M4 decisions: engine params in rule_hash, swing break event and state
+
+- Date: 2026-10-03
+- Model: Claude Opus 5.5
+
+Settles the two "Open before M4" items from the M3 entry and HANDOFF. M4 has not been started.
+
+### Files created or modified
+- `repo/api/app/core/hashing.py` - `frozen_engine_params()`; `rule_hash_input` / `rule_hash` take an optional `engine_params` mapping and hash it under its own `engine_params` key. `canonical_serialize` is unchanged.
+- `repo/api/app/core/constants.py` - `RULE_VERSION = 'phase1-v2'` (was `phase1-v1`). No other value moved.
+- `repo/api/app/core/features/params.py` - docstring only: it now says these values ARE hashed. No value changed.
+- `repo/api/app/core/features/levels.py` - `SwingState.break_is_new`, `swing_break_event(state, bar_close)`, docstring section "Swing break: event and state".
+- `repo/api/app/core/features/assemble.py` - fills `swing_break_state`, `swing_break_event`; `swing_break_direction` gets a NULL reason when there is no break.
+- `repo/api/app/core/features/columns.py` - `swing_break` -> `swing_break_state`, new `swing_break_event`; 54 feature columns (was 53).
+- `repo/api/app/models/features.py` - the same rename and new column; comments on all three swing-break columns.
+- `repo/api/alembic/versions/20261003_1541_1c329301cc23_swing_break_event_and_state.py` - hand-written: renames the column (no drop/add), adds `swing_break_event`, updates comments; reversible.
+- Tests: `test_hashing.py` (+7: payload guard, guard negative control, types, payload layout, sensitivity, fractional-second refusal, version pin), `test_ingest_config.py` (lags and settle margin added to the "cannot change the rule hash" test), `test_features_golden.py` (+5 hand-worked event/state cases), `test_features_causality.py` (+5 whole-row event/state tests; the `swing_state` extractor also returns the event), `test_features_determinism.py` (+2: stateless cold start / live == replay; both columns are in the hash), `test_features_null.py` and `test_features_columns.py` (renamed column, 63/54 counts).
+
+### Contracts frozen
+**Rule hash payload (supersedes the M0 derivation):**
+```
+sha256(canonical_serialize({
+    "rule_version": RULE_VERSION,
+    "constants":     {NAME: value for public UPPERCASE names in app.core.constants except RULE_VERSION},
+    "engine_params": frozen_engine_params(),
+}))
+```
+- `frozen_engine_params()` lists every public UPPERCASE value of `app.core.features.params` EXPLICITLY. Two are converted: `FUNDING_MAX_AGE` (timedelta) -> `FUNDING_MAX_AGE_SECONDS` (int, 57600; a fractional second raises `ValueError`), and `PRODUCTION_POLICY` -> `{"window_days": 90, "min_span_days": 7.0, "min_samples": 30}` (its dataclass fields). Everything else goes in as is.
+- **Guard:** `tests/test_hashing.py::test_every_public_engine_param_is_in_the_rule_hash_payload` fails if `params.py` gains (or loses) a public UPPERCASE name that `frozen_engine_params()` does not cover. Imported modules (`C`) are excluded. Adding a parameter means adding it to `frozen_engine_params()`, which changes `rule_hash`.
+- **Not hashed:** anything in `app/config.py` (the OI/funding publication lags, the kline settle margin, `WATCHLIST`, poll intervals, staleness grace). These are infrastructure, and a test proves changing them leaves `rule_hash()` unchanged.
+- `rule_hash(constants=None, rule_version=None, engine_params=None)`, `rule_hash_input(...)` with the same arguments, and `frozen_engine_params() -> dict[str, Any]` are the signatures.
+- **`rule_hash()` at `phase1-v2` = `26ba07a110202114f8117f1be5a1551ded290c300dd2712325f3920a53256915`** (was `d6b4f0de9e7ead4f1ff802c5a5d23f8a5fc4a937081a5b90896be741e97867f4` at `phase1-v1` without engine params). No candidate or label rows existed, so nothing carries the old hash.
+
+**Swing break: three columns on `feature_row`** (all nullable bool/text, NULL when the 4h series is not current or has no confirmed swing):
+- `swing_break_direction` - `long` | `short`: the side of the latest completed 4h close that is strictly beyond the broken swing S (the M3 rule for picking S is unchanged: the last confirmed 2-bar fractal high/low, the more recent one when a close is beyond both). NULL, with a reason, when no close is beyond S. It applies to the event and the state alike.
+- `swing_break_event` - TRUE iff the latest completed 4h close is beyond S AND the previous 4h close was not beyond S AND this 15m bar's close IS that 4h close (`bar_close == run[-1].close_time`, i.e. the 4h boundary). FALSE on every other 15m bar. No grace window. It does not look at the chandelier.
+- `swing_break_state` - the direction permission for the 15m triggers. TRUE iff a 4h close is beyond S (direction not NULL) AND `chandelier_stop_distance_atr > 0` (the column value, rounded to its 6-decimal scale, so the stored row agrees with itself). FALSE when no close is beyond S (a 4h close moved back through S, or there never was a break) or when the distance is <= 0. NULL, with a reason, when a break exists but ATR or the signal-bar price is missing, so the stop cannot be checked.
+- `chandelier_stop_price` / `chandelier_stop_distance_atr` are still filled whenever there is a direction, including when the state is FALSE because the stop is breached (the distance then shows by how much).
+- **Both are stateless.** Each is a pure function of the bars visible at `bar_close` (the last `SWING_HISTORY_BARS` 4h bars, the signal 15m bar, ATR from the last `ATR_HISTORY_BARS` 4h bars). Nothing is carried between bars, so a live row, a replay row and a process started cold produce the same values (tested).
+- How M4 reads them: the setup is "direction = `swing_break_direction` while `swing_break_state` is TRUE"; a rule that wants "the bar of the break" reads `swing_break_event`. The candidate `trigger` vocabulary (`TRIGGERS`, including `'swing_break'`) is unchanged; whether a `swing_break` trigger fires on the event or on the state is M4's rule, and these columns support either.
+- Pure API: `levels.SwingState.break_is_new: bool` (latest 4h close beyond `broken`, previous one not), `levels.swing_break_event(state, bar_close) -> bool`.
+- Alembic head is `1c329301cc23`. `feature_row` has 63 columns, 54 of them features.
+
+### Deferred to a later milestone
+- Every M4 item from HANDOFF (frozen rules, setup-family vocabulary, locked-book hash) -> M4. Not started here.
+- Per-coin options OI floor and "large expiry" -> M5. Independent sample = group first row vs mean -> M8.
+
+### Deviations from the plan
+- **The M3 contract line "`swing_break` is false and the direction NULL when no swing is broken" is superseded** by the three-column contract above. The column is renamed, not reinterpreted in place, so no reader of the old name can silently get the new meaning.
+- **`swing_break_direction` NULL now carries a reason** ("no 4h close beyond the last swing"). M3 left it NULL without one; the NULL-reason invariant in `test_features_null.py` now covers it.
+- **`feature_hash` values change** for every row (a new column is in the mapping): the real-data BTCUSDT row at 2026-10-02 18:15 is now `db3603ceef7e3894e9d0dc74b8c74ae1e732c8f32ccf5bb78aaf3ab66b35240f` (M3 reported `33b81f0a...`). There were 0 `feature_row` rows in `signals`, so nothing stored is stale.
+
+### Ambiguities (spec quotes and choices)
+1. **"A 4h close beyond the last 2-bar fractal swing" - which S the state is measured against.** The state keeps the M3 definition: S is the last CONFIRMED swing as of the latest 4h bar. If price breaks S, runs, and then a new swing forms beyond the break (e.g. a higher swing high two bars after a post-break peak), the latest close is measured against the NEW swing, so the state can end before price has gone back through the ORIGINAL S. Remembering the original S would need memory across bars or a longer search, so it was left as is. The chandelier usually ends the state around the same time in that pattern anyway. Decide in M4/M7 if replay shows it matters.
+2. **"Previous 4h close not beyond S"** is checked against the same S the latest close broke. If S was confirmed only by the latest bar, the previous bar is one of its confirming bars and cannot have closed beyond it, so the event is well-defined there too.
+3. **Stop exactly at price.** `chandelier_stop_distance_atr == 0` ends the state (the brief says "<= 0"); tested.
+
+### Verification
+- `cd repo/api; & '.\.venv\Scripts\python.exe' -m pytest -q` -> **`800 passed in 153.22s`** (780 before + 20 new; no skips).
+- `python -m alembic upgrade head` -> `7cd7d7f2e800 -> 1c329301cc23`; `downgrade -1` and `upgrade head` again round-trip cleanly; `alembic current` = `1c329301cc23 (head)`. `test_migration_matches_models` (compare_metadata against `public`) finds an empty diff.
+- Real data, `python -m app.worker.feature_job --coins BTCUSDT --at 2026-10-02T18:15:00Z --source replay --dry-run`: `swing_break_direction` long, `swing_break_state` TRUE, `swing_break_event` FALSE (the break M3 noted is about a day old), chandelier 84,254.80, distance 0.602343 ATR. These match M3's numbers.

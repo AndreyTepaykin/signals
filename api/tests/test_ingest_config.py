@@ -38,10 +38,15 @@ def test_changing_the_watchlist_or_feed_knobs_cannot_change_the_rule_hash(monkey
     monkeypatch.setenv('WATCHLIST', 'BTCUSDT')
     monkeypatch.setenv('FEED_KLINE_POLL_SECONDS', '120')
     monkeypatch.setenv('FEED_STALENESS_GRACE_SECONDS', '600')
+    monkeypatch.setenv('FEED_OPEN_INTEREST_PUBLICATION_LAG_SECONDS', '400')
+    monkeypatch.setenv('FEED_FUNDING_PUBLICATION_LAG_SECONDS', '60')
+    monkeypatch.setenv('FEED_KLINE_SETTLE_SECONDS', '45')
     get_settings.cache_clear()
     try:
         assert get_settings().watchlist_symbols == ('BTCUSDT',)
         assert get_settings().feed_kline_poll_seconds == 120
+        assert get_settings().feed_open_interest_publication_lag_seconds == 400
+        assert get_settings().feed_kline_settle_seconds == 45
         assert rule_hash() == before
     finally:
         get_settings.cache_clear()

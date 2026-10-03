@@ -107,7 +107,7 @@ def test_no_spot_gives_null_basis_and_disagreement(alt):
 
 def test_no_4h_series_nulls_the_atr_and_everything_divided_by_it(alt):
     result = compute_features(replace(alt, perp_4h=[]))
-    _null(result, 'atr_price', 'atr_timeframe', 'swing_break', 'swing_break_direction', 'last_swing_high',
+    _null(result, 'atr_price', 'atr_timeframe', 'swing_break_state', 'swing_break_event', 'swing_break_direction', 'last_swing_high',
           'last_swing_low', 'swing_anchor_time', 'swing_vwap_anchor_time', 'chandelier_stop_price', *ATR_DISTANCES)
     # levels that are prices, not ATR multiples, do not need the ATR
     _present(result, 'poc_price', 'value_area_high', 'value_area_low', 'rsi', 'squeeze_on', 'cvd_delta')
@@ -117,7 +117,7 @@ def test_a_stale_4h_series_is_null_not_the_previous_bars_values(alt):
     """The newest 4h bar is missing: the swing state belongs to the PREVIOUS 4h bar and must not be reused."""
     behind = [b for b in alt.perp_4h if b.close_time < END]
     result = compute_features(replace(alt, perp_4h=behind))
-    _null(result, 'atr_price', 'swing_break', 'last_swing_high', 'chandelier_stop_price')
+    _null(result, 'atr_price', 'swing_break_state', 'swing_break_event', 'last_swing_high', 'chandelier_stop_price')
 
 
 def test_no_signal_bar_nulls_everything_that_is_about_the_signal_bar(alt):

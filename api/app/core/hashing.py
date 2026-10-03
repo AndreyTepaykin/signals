@@ -34,11 +34,12 @@ numpy scalars -> converted to the equivalent Python bool/int/float
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import math
 import subprocess
 from collections.abc import Mapping
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,7 @@ from typing import Any
 import numpy as np
 
 from app.core import constants as C
+from app.core.features import params as P
 from app.core.time import ensure_utc
 
 CODE_VERSION_UNKNOWN = 'unknown'
@@ -162,27 +164,82 @@ def frozen_constants() -> dict[str, Any]:
     }
 
 
-def rule_hash_input(constants: Mapping[str, Any] | None = None, rule_version: str | None = None) -> str:
+def _whole_seconds(value: timedelta) -> int:
+    if value % timedelta(seconds=1):
+        raise ValueError(f'{value!r} is not a whole number of seconds')
+    return value // timedelta(seconds=1)
+
+
+def frozen_engine_params() -> dict[str, Any]:
+    """The public UPPERCASE values of ``app.core.features.params``, in serializable form.
+
+    Every name is listed explicitly so that a new parameter cannot slip in
+    unhashed or with an undefined value type; ``tests/test_hashing.py`` fails
+    if ``params.py`` gains a public UPPERCASE name that is missing here. Two
+    values are converted: ``FUNDING_MAX_AGE`` (a ``timedelta``) is stored as
+    ``FUNDING_MAX_AGE_SECONDS`` (``int``), and ``PRODUCTION_POLICY`` (a
+    ``HistoryPolicy``) as a mapping of its dataclass fields.
+    """
+    policy = P.PRODUCTION_POLICY
+    return {
+        'SIGNAL_TIMEFRAME': P.SIGNAL_TIMEFRAME,
+        'ATR_TIMEFRAME': P.ATR_TIMEFRAME,
+        'REALIZED_VOL_TIMEFRAME': P.REALIZED_VOL_TIMEFRAME,
+        'REALIZED_VOL_BARS': P.REALIZED_VOL_BARS,
+        'BASIS_TIMEFRAME': P.BASIS_TIMEFRAME,
+        'OI_SERIES_TIMEFRAME': P.OI_SERIES_TIMEFRAME,
+        'OI_CHANGE_STEPS': P.OI_CHANGE_STEPS,
+        'OI_MAX_AGE_PERIODS': P.OI_MAX_AGE_PERIODS,
+        'FUNDING_MAX_AGE_SECONDS': _whole_seconds(P.FUNDING_MAX_AGE),
+        'HISTORY_DAYS': P.HISTORY_DAYS,
+        'PRODUCTION_POLICY': {field.name: getattr(policy, field.name) for field in dataclasses.fields(policy)},
+        'ATR_HISTORY_BARS': P.ATR_HISTORY_BARS,
+        'RSI_HISTORY_BARS': P.RSI_HISTORY_BARS,
+        'SWING_HISTORY_BARS': P.SWING_HISTORY_BARS,
+        'FAMILY_MEMORY_BARS': P.FAMILY_MEMORY_BARS,
+        'SESSION_MIN_BARS': P.SESSION_MIN_BARS,
+        'LIQUIDATION_LOOKBACK_HOURS': P.LIQUIDATION_LOOKBACK_HOURS,
+        'LIQUIDATION_MIN_PRINTS': P.LIQUIDATION_MIN_PRINTS,
+        'LIQUIDATION_BIN_ATR': P.LIQUIDATION_BIN_ATR,
+        'LIQUIDATION_RATE_WINDOW_MINUTES': P.LIQUIDATION_RATE_WINDOW_MINUTES,
+        'DAYS_PER_YEAR': P.DAYS_PER_YEAR,
+        'HOURS_PER_YEAR': P.HOURS_PER_YEAR,
+    }
+
+
+def rule_hash_input(
+    constants: Mapping[str, Any] | None = None,
+    rule_version: str | None = None,
+    engine_params: Mapping[str, Any] | None = None,
+) -> str:
     """The exact text that :func:`rule_hash` digests (exposed for tests/audit)."""
     payload = {
         'rule_version': C.RULE_VERSION if rule_version is None else rule_version,
         'constants': frozen_constants() if constants is None else constants,
+        'engine_params': frozen_engine_params() if engine_params is None else engine_params,
     }
     return canonical_serialize(payload)
 
 
-def rule_hash(constants: Mapping[str, Any] | None = None, rule_version: str | None = None) -> str:
-    """Hex digest over the frozen constants plus the rule-version string.
+def rule_hash(
+    constants: Mapping[str, Any] | None = None,
+    rule_version: str | None = None,
+    engine_params: Mapping[str, Any] | None = None,
+) -> str:
+    """Hex digest over the frozen constants, the engine parameters and the rule-version string.
 
     Derivation: ``sha256(canonical_serialize({"rule_version": RULE_VERSION,
-    "constants": {NAME: value, ...}}))`` where the constants are the live
-    public UPPERCASE values of ``app.core.constants``. It hashes VALUES, never
-    file bytes, so a comment or formatting edit does not change it, while any
-    threshold change (or a ``RULE_VERSION`` bump) does. Arguments exist so
-    tests can show the sensitivity without editing the module; production
-    callers pass nothing.
+    "constants": {NAME: value, ...}, "engine_params": {NAME: value, ...}}))``
+    where the constants are the live public UPPERCASE values of
+    ``app.core.constants`` and the engine parameters are
+    :func:`frozen_engine_params`. It hashes VALUES, never file bytes, so a
+    comment or formatting edit does not change it, while any threshold or
+    engine-parameter change (or a ``RULE_VERSION`` bump) does. Infrastructure
+    settings in ``app.config`` (publication lags, settle margin, watchlist) are
+    NOT part of it. Arguments exist so tests can show the sensitivity without
+    editing the module; production callers pass nothing.
     """
-    return _digest(rule_hash_input(constants, rule_version))
+    return _digest(rule_hash_input(constants, rule_version, engine_params))
 
 
 # ---------------------------------------------------------------------------

@@ -1,13 +1,15 @@
 import re
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from types import MappingProxyType
+from types import MappingProxyType, ModuleType
 
 import numpy as np
 import pytest
 
 from app.core import constants as C
 from app.core import hashing as H
+from app.core.features import params as P
+from app.core.features.params import HistoryPolicy
 
 
 # --- feature_hash ---------------------------------------------------------
@@ -147,6 +149,67 @@ def test_rule_hash_changes_with_rule_version():
 def test_rule_hash_ignores_key_order_of_constants():
     base = H.frozen_constants()
     assert H.rule_hash(base) == H.rule_hash(dict(reversed(list(base.items()))))
+
+
+# --- engine params in the rule hash ----------------------------------------
+# params.py names stored under a different payload key because their value is converted.
+ENGINE_PARAM_RENAMES = {'FUNDING_MAX_AGE': 'FUNDING_MAX_AGE_SECONDS'}
+
+
+def _public_params_names():
+    return {
+        name
+        for name, value in vars(P).items()
+        if name.isupper() and not name.startswith('_') and not isinstance(value, ModuleType)
+    }
+
+
+def test_every_public_engine_param_is_in_the_rule_hash_payload():
+    expected = {ENGINE_PARAM_RENAMES.get(name, name) for name in _public_params_names()}
+    assert set(H.frozen_engine_params()) == expected
+
+
+def test_the_guard_sees_a_new_public_name_in_params(monkeypatch):
+    monkeypatch.setattr(P, 'NEW_ENGINE_CHOICE', 7, raising=False)
+    assert 'NEW_ENGINE_CHOICE' in _public_params_names()
+    assert 'NEW_ENGINE_CHOICE' not in H.frozen_engine_params()
+
+
+def test_engine_params_are_serialized_with_defined_types():
+    params = H.frozen_engine_params()
+    H.canonical_serialize(params)
+    assert params['FUNDING_MAX_AGE_SECONDS'] == 16 * 3600 and type(params['FUNDING_MAX_AGE_SECONDS']) is int
+    assert params['PRODUCTION_POLICY'] == {'window_days': 90, 'min_span_days': 7.0, 'min_samples': 30}
+    assert 'FUNDING_MAX_AGE' not in params
+
+
+def test_engine_params_sit_under_their_own_key_beside_the_constants():
+    text = H.rule_hash_input()
+    assert text.startswith('{"constants":{') and ',"engine_params":{' in text and ',"rule_version":' in text
+    assert set(H.frozen_engine_params()).isdisjoint(H.frozen_constants())
+
+
+def test_rule_hash_changes_when_an_engine_param_changes(monkeypatch):
+    before = H.rule_hash()
+    monkeypatch.setattr(P, 'ATR_HISTORY_BARS', P.ATR_HISTORY_BARS + 1)
+    assert H.rule_hash() != before
+    monkeypatch.undo()
+    assert H.rule_hash() == before
+    monkeypatch.setattr(P, 'PRODUCTION_POLICY', HistoryPolicy(min_samples=31))
+    assert H.rule_hash() != before
+    monkeypatch.undo()
+    monkeypatch.setattr(P, 'FUNDING_MAX_AGE', timedelta(hours=17))
+    assert H.rule_hash() != before
+
+
+def test_a_fractional_second_funding_age_is_refused(monkeypatch):
+    monkeypatch.setattr(P, 'FUNDING_MAX_AGE', timedelta(hours=16, microseconds=1))
+    with pytest.raises(ValueError):
+        H.frozen_engine_params()
+
+
+def test_rule_version_is_phase1_v2():
+    assert C.RULE_VERSION == 'phase1-v2'
 
 
 # --- code_version ---------------------------------------------------------

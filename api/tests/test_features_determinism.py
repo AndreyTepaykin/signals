@@ -20,12 +20,12 @@ from pathlib import Path
 import pytest
 
 from app.core import constants as C
-from app.core.features import columns
+from app.core.features import columns, levels
 from app.core.features.assemble import compute_features
 from app.core.features.series import FundingPrint
 from app.core.hashing import feature_hash
 
-from feature_helpers import dt, synthetic_inputs
+from feature_helpers import H4, dt, synthetic_inputs, truncate_inputs
 
 API_ROOT = Path(__file__).resolve().parents[1]
 FEATURES_DIR = API_ROOT / 'app' / 'core' / 'features'
@@ -212,6 +212,47 @@ def test_replay_hash_is_the_same_for_every_horizon_and_ignores_a_predicted_print
     stamp = market.bar_close + timedelta(seconds=20)
     with_predicted = replace(market, funding_predicted=FundingPrint(stamp, stamp, 0.0002, 8))
     assert compute_features(with_predicted).feature_hash == baseline.feature_hash  # replay: not point-in-time, ignored
+
+
+SWING_COLUMNS = ('swing_break_state', 'swing_break_event', 'swing_break_direction', 'chandelier_stop_price', 'chandelier_stop_distance_atr')
+
+
+def _first_swing_break_event(market):
+    t = dt(2026, 5, 10)
+    while t < dt(2026, 5, 31):
+        state, _ = levels.swing_state(market.perp_4h, t, H4)
+        if state is not None and levels.swing_break_event(state, t):
+            return t
+        t += H4
+    raise AssertionError('the synthetic market has no swing-break event: pick another seed')
+
+
+def test_swing_break_is_stateless_cold_start_equals_warm_start_and_live_equals_replay(market):
+    """No memory between bars: a process that started 40 days later, or a live row, sees the same swing break."""
+    t = _first_swing_break_event(market)
+    for bar_close in (t, t + timedelta(minutes=15), t + timedelta(hours=4)):
+        warm = truncate_inputs(market, bar_close)
+        cutoff = bar_close - timedelta(days=40)  # still more than SWING_HISTORY_BARS and ATR_HISTORY_BARS of 4h bars
+        cold = replace(
+            warm,
+            perp_15m=[b for b in warm.perp_15m if b.open_time >= cutoff],
+            spot_15m=[b for b in warm.spot_15m if b.open_time >= cutoff],
+            perp_1h=[b for b in warm.perp_1h if b.open_time >= cutoff],
+            spot_1h=[b for b in warm.spot_1h if b.open_time >= cutoff],
+            perp_4h=[b for b in warm.perp_4h if b.open_time >= cutoff],
+        )
+        replay = compute_features(warm).values
+        assert replay['swing_break_event'] is (bar_close == t)
+        assert {n: compute_features(cold).values[n] for n in SWING_COLUMNS} == {n: replay[n] for n in SWING_COLUMNS}
+        live = compute_features(replace(warm, source='live')).values
+        assert {n: live[n] for n in SWING_COLUMNS} == {n: replay[n] for n in SWING_COLUMNS}
+
+
+def test_swing_break_event_and_state_are_in_the_hash(baseline):
+    for name in ('swing_break_event', 'swing_break_state'):
+        flipped = {**baseline.values, name: not baseline.values[name]}
+        assert feature_hash(flipped) != baseline.feature_hash
+        assert feature_hash({**baseline.values, name: None}) != baseline.feature_hash
 
 
 def test_live_carry_band_depends_on_the_horizon_and_is_the_hand_value(market):

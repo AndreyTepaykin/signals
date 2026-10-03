@@ -1,8 +1,8 @@
 """The ``feature_row`` columns this engine fills, and how each value is normalised.
 
-``feature_row`` has 62 columns. Nine are identity or bookkeeping and are NOT
+``feature_row`` has 63 columns. Nine are identity or bookkeeping and are NOT
 features (``id``, ``created_at``, ``coin``, ``horizon``, ``signal_timeframe``,
-``bar_close``, ``source``, ``feature_hash``, ``code_version``); the other 53 are
+``bar_close``, ``source``, ``feature_hash``, ``code_version``); the other 54 are
 listed here with a ``kind``. ``tests/test_features_columns.py`` compares this
 registry with the SQLAlchemy model (names, numeric precision and scale), so a
 column added or resized in ``app/models/features.py`` fails a test here instead
@@ -104,7 +104,8 @@ FEATURE_COLUMNS: dict[str, Column] = {
     'value_area_low_distance_atr': ATR_UNITS,
     'squeeze_on': BOOL,
     'squeeze_bandwidth_ratio': RATIO,
-    'swing_break': BOOL,
+    'swing_break_state': BOOL,
+    'swing_break_event': BOOL,
     'swing_break_direction': STR,
     'last_swing_high': PRICE,
     'last_swing_low': PRICE,

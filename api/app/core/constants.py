@@ -30,7 +30,7 @@ from types import MappingProxyType
 # ---------------------------------------------------------------------------
 # Rule version (hashed together with the constants below).
 # ---------------------------------------------------------------------------
-RULE_VERSION = 'phase1-v1'
+RULE_VERSION = 'phase1-v2'
 
 # ---------------------------------------------------------------------------
 # Horizons and vertical barriers

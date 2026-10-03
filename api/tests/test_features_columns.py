@@ -29,7 +29,7 @@ def test_registry_covers_every_feature_column_and_nothing_else():
     non_feature = set(columns.NON_FEATURE_COLUMNS)
     assert registry | non_feature == model_columns
     assert registry & non_feature == set()
-    assert len(model_columns) == 62 and len(registry) == 53 and len(non_feature) == 9
+    assert len(model_columns) == 63 and len(registry) == 54 and len(non_feature) == 9
 
 
 def test_registry_order_is_the_model_order():

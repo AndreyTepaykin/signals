@@ -41,6 +41,21 @@ newest bars can never be the "last swing". A 4h close "beyond" the swing is a
 close strictly above the last confirmed swing high (or below the last swing low).
 If both hold, the more recently formed swing decides.
 
+Swing break: event and state
+----------------------------
+Two facts, both pure functions of the bars visible at the signal bar (no memory
+carried between bars, so live and replay agree):
+
+* **Event** - the latest completed 4h close is beyond the broken swing S AND the
+  previous 4h close was not beyond S. It is true only on the 15m bar whose close
+  IS that 4h close (the 4h boundary); every other 15m bar inside the 4h bar
+  reads false. No grace window.
+* **State** - the latest completed 4h close is beyond S (the direction
+  permission for the 15m triggers). It ends when a 4h close moves back through
+  S, or when the chandelier distance at the signal bar is at or below zero.
+  The chandelier half is applied where the 15m price and the ATR are known
+  (``assemble``), not here.
+
 Chandelier
 ----------
 For the direction of the swing break: the extreme high (long) or low (short)
@@ -250,6 +265,11 @@ class SwingState:
     broken: Swing | None  # the swing the latest close is beyond
     break_direction: str | None  # 'long' | 'short'
     latest_swing: Swing | None  # most recent confirmed swing of either kind
+    break_is_new: bool = False  # the latest close is beyond ``broken`` and the previous close was not
+
+
+def _beyond(close: float, swing: Swing, direction: str) -> bool:
+    return close > swing.price if direction == 'long' else close < swing.price
 
 
 def swing_state(bars: Sequence[Bar], as_of: datetime, step: timedelta) -> tuple[SwingState | None, str | None]:
@@ -278,7 +298,13 @@ def swing_state(bars: Sequence[Bar], as_of: datetime, step: timedelta) -> tuple[
         broken, direction = last_low, 'short'
     candidates = [s for s in (last_high, last_low) if s is not None]
     latest_swing = max(candidates, key=lambda s: s.index)
-    return SwingState(tuple(run), last_high, last_low, broken, direction, latest_swing), None
+    break_is_new = broken is not None and direction is not None and not _beyond(run[-2].close, broken, direction)
+    return SwingState(tuple(run), last_high, last_low, broken, direction, latest_swing, break_is_new), None
+
+
+def swing_break_event(state: SwingState, bar_close: datetime) -> bool:
+    """True only on the 15m bar whose close is the 4h close that first went beyond the swing."""
+    return state.break_is_new and state.run[-1].close_time == bar_close
 
 
 # ---------------------------------------------------------------------------

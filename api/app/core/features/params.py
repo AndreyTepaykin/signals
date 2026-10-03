@@ -7,11 +7,12 @@ recursive indicator gets, and how much history a 90-day statistic needs before
 it is allowed to speak. Each one is documented with the ambiguity it resolves
 in the Milestone 3 entry of ``docs/BUILD-LOG.md``.
 
-They are deliberately NOT in ``constants.py``: adding an UPPERCASE name there
-changes ``rule_hash()`` and the owner asked for no constant to move in this
-milestone. The consequence is real and is reported: changing a value here
-changes feature VALUES (and so ``feature_hash``) but not ``rule_hash``;
-``code_version`` is what distinguishes the two builds.
+They are kept apart from ``constants.py`` (spec numbers vs engine choices),
+but they ARE hashed: ``app.core.hashing.frozen_engine_params`` puts every
+public UPPERCASE value here into the ``rule_hash()`` payload under its own
+``engine_params`` key. Changing a value here changes both the feature values
+and ``rule_hash``. A new public UPPERCASE name must be added to
+``frozen_engine_params`` too, or ``tests/test_hashing.py`` fails.
 
 Nothing here is read from the environment or the clock. The same code on the
 same bars gives the same numbers in a live run and in a replay.

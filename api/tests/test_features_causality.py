@@ -87,7 +87,7 @@ def _profile(i):
 
 def _swings(i):
     state, _ = levels.swing_state(i.perp_4h, i.bar_close, H4)
-    return state
+    return state, levels.swing_break_event(state, i.bar_close) if state is not None else None
 
 
 def _chandelier(i):
@@ -232,6 +232,94 @@ def test_a_print_that_exists_but_was_not_yet_available_equals_no_print(market):
     assert any(b.close_time == bar_close for b in delayed.perp_15m)  # it exists, it is just not available yet
     removed = replace(base, perp_15m=[b for b in base.perp_15m if b.close_time < bar_close])
     assert compute_features(delayed).feature_hash == compute_features(removed).feature_hash
+
+
+# ---------------------------------------------------------------------------
+# Swing break event and state on the whole row
+# ---------------------------------------------------------------------------
+SWING_COLUMNS = ('swing_break_state', 'swing_break_event', 'swing_break_direction', 'chandelier_stop_price', 'chandelier_stop_distance_atr')
+
+
+def _event_bars(market, limit=3):
+    """4h boundaries at which the seeded market's 4h close first goes beyond a swing."""
+    found = []
+    t = dt(2026, 5, 10)
+    while t < dt(2026, 5, 31) and len(found) < limit:
+        state, _ = levels.swing_state(market.perp_4h, t, H4)
+        if state is not None and levels.swing_break_event(state, t):
+            found.append(t)
+        t += H4
+    assert found, 'the synthetic market has no swing-break event: pick another seed'
+    return found
+
+
+def _swing(result):
+    return {name: result.values[name] for name in SWING_COLUMNS}
+
+
+def test_swing_break_event_and_state_ignore_everything_after_T(market):
+    for t in _event_bars(market):
+        early = compute_features(truncate_inputs(market, t))
+        assert early.values['swing_break_event'] is True and early.values['swing_break_direction'] in ('long', 'short')
+        assert _swing(compute_features(at_bar(market, t))) == _swing(early)
+        assert _swing(compute_features(poison_future(market, t))) == _swing(early)
+
+
+def test_swing_break_event_is_false_on_every_other_15m_bar_of_the_next_4h_bar(market):
+    t = _event_bars(market, limit=1)[0]
+    direction = compute_features(truncate_inputs(market, t)).values['swing_break_direction']
+    for k in (1, 2, 15):
+        later = compute_features(truncate_inputs(market, t + M15 * k))
+        assert later.values['swing_break_event'] is False
+        assert later.values['swing_break_direction'] == direction  # the 4h close is still beyond the swing
+
+
+def test_swing_break_event_is_false_when_the_previous_4h_close_was_already_beyond(market):
+    # the 4h bar after an event, if it also closes beyond the same swing, is state without event
+    checked = 0
+    for t in _event_bars(market, limit=10):
+        nxt = t + H4
+        state, _ = levels.swing_state(market.perp_4h, nxt, H4)
+        if state is not None and state.break_direction is not None:
+            row = compute_features(truncate_inputs(market, nxt))
+            assert row.values['swing_break_event'] is False and row.values['swing_break_direction'] is not None
+            checked += 1
+    assert checked, 'no event was followed by a second close beyond the swing: pick another seed'
+
+
+def test_a_breached_chandelier_ends_the_state_but_not_the_event(market):
+    t = _event_bars(market, limit=1)[0]
+    base = truncate_inputs(market, t)
+    before = compute_features(base)
+    assert before.values['swing_break_state'] is True and before.values['chandelier_stop_distance_atr'] > 0
+    stop, atr = before.values['chandelier_stop_price'], before.values['atr_price']
+    direction = before.values['swing_break_direction']
+    breached = stop - 0.5 * atr if direction == 'long' else stop + 0.5 * atr
+
+    def move_signal_close(b):
+        if b.close_time != t:
+            return b
+        return replace(b, close=breached, high=max(b.high, breached), low=min(b.low, breached))
+
+    after = compute_features(replace(base, perp_15m=[move_signal_close(b) for b in base.perp_15m]))
+    assert after.values['chandelier_stop_price'] == stop  # the stop is a 4h object; only the 15m price moved
+    assert after.values['chandelier_stop_distance_atr'] <= 0
+    assert after.values['swing_break_state'] is False
+    assert after.values['swing_break_event'] is True and after.values['swing_break_direction'] == direction
+
+
+def test_a_stop_exactly_at_price_is_breached(market):
+    t = _event_bars(market, limit=1)[0]
+    base = truncate_inputs(market, t)
+    before = compute_features(base)
+    stop = before.values['chandelier_stop_price']
+
+    def put_close_on_stop(b):
+        return replace(b, close=stop, high=max(b.high, stop), low=min(b.low, stop)) if b.close_time == t else b
+
+    after = compute_features(replace(base, perp_15m=[put_close_on_stop(b) for b in base.perp_15m]))
+    assert after.values['chandelier_stop_distance_atr'] == 0.0
+    assert after.values['swing_break_state'] is False
 
 
 # ---------------------------------------------------------------------------
