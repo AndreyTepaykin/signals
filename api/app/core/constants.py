@@ -30,7 +30,7 @@ from types import MappingProxyType
 # ---------------------------------------------------------------------------
 # Rule version (hashed together with the constants below).
 # ---------------------------------------------------------------------------
-RULE_VERSION = 'phase1-v3'
+RULE_VERSION = 'phase1-v4'
 
 # ---------------------------------------------------------------------------
 # Horizons and vertical barriers
@@ -180,10 +180,104 @@ OPTIONS_VERDICT_PRECEDENCE = ('ignore', 'expiry_pin', 'headwind', 'amplify', 'da
 OPTIONS_VOL_TAGS = ('vol_rich', 'vol_cheap')
 OPTIONS_EXPRESSIONS = ('perp', 'spot', 'defined_risk_option', 'wait_for_expiry')
 
-# Per-coin open-interest floor for `ignore`. The spec says "a per-coin floor
-# you set by hand". NO VALUE HAS BEEN SET: empty means "no floor configured",
-# and Milestone 5 / the owner must fill it. Not invented here.
-OPTIONS_OI_FLOOR_BY_COIN = MappingProxyType({})
+# Per-coin open-interest floor for `ignore`, in underlying-coin units of total
+# Deribit option open interest. The spec says "a per-coin floor you set by
+# hand"; owner-set 2026-10-03 at about 30% of that day's book (BTC 349k, ETH
+# 1.33M). A coin with no entry has no floor configured and is never treated as
+# liquid.
+OPTIONS_OI_FLOOR_BY_COIN = MappingProxyType({'BTCUSDT': 100_000.0, 'ETHUSDT': 400_000.0})
+
+# ---------------------------------------------------------------------------
+# Options check (Milestone 5): interpretations the spec leaves open.
+# Each is a numbered Ambiguity in the M5 BUILD-LOG entry. A value marked
+# INVENTED is not in the spec; it is the most conservative reading I could
+# defend and it is here so the owner can challenge it (it enters rule_hash).
+# ---------------------------------------------------------------------------
+# Which coins have a Deribit book ("BTC and ETH first"): Binance symbol -> Deribit currency.
+# Any other coin has no options book and its verdict is `ignore` with
+# OPTIONS_IGNORE_NO_BOOK_FOR_COIN, after which the candidate proceeds on the
+# non-options ranks ("Alts use ranks 1-3, 5, 6, and perp basis until their
+# options open interest is deep enough").
+OPTIONS_CURRENCY_BY_COIN = MappingProxyType({'BTCUSDT': 'BTC', 'ETHUSDT': 'ETH'})
+
+# "Near-dated open interest" (the headwind denominator). The spec never defines it.
+# Read as: the open interest of every expiry that settles within the longest hold
+# (72h), i.e. every expiry that can still hedge inside ANY horizon's hold. INVENTED
+# mapping (it reuses LONGEST_HORIZON_HOURS rather than a new number).
+OPTIONS_NEAR_DATED_HOURS = LONGEST_HORIZON_HOURS
+
+# "Large expiry" (stand-down 15 min either side; also `event_calendar.is_large`).
+# The spec never defines it. Read as: the expiry holds at least this share of the
+# coin's total options open interest. Scale-free, so no hand-set dollar figure.
+# INVENTED (5%: flags weeklies, monthlies and quarterlies; lower = more stand-downs,
+# which cost only a 30-minute shadow window each).
+LARGE_EXPIRY_MIN_OI_SHARE = 0.05
+
+# Stale / thin / unconfigured-floor book on a coin that HAS a Deribit book.
+# The spec says `ignore` "leaves size, stop, and targets unchanged", i.e. the card
+# goes ahead. The M5 brief says a candidate must not become an alert on stale or
+# missing options data. True (the brief) keeps such a candidate at `watch` with an
+# explicit `options_ignored:<why>` reason; False follows the spec literally and
+# lets it alert. Coins WITHOUT a book are never blocked by this.
+OPTIONS_IGNORE_BLOCKS_ALERT_ON_COVERED_COINS = True
+
+# Dealer gamma sign. Public Deribit data gives open interest by strike but never
+# who holds it, so the sign is an ESTIMATE from a named proxy (stored as
+# `dealer_gamma_proxy`, `dealer_gamma_estimated = true`). Proxy used (the
+# SqueezeMetrics / GEX convention): customers are net short calls (overwriting) and
+# net long puts (protection), so dealers are LONG call gamma and SHORT put gamma.
+# Net dealer gamma at the spot is the open-interest-weighted sum, calls positive,
+# puts negative; +1 = dealers long gamma (pin), -1 = short gamma (extend).
+OPTIONS_GAMMA_PROXY = 'dealers_long_calls_short_puts'
+# The flip is where net dealer gamma changes sign as the spot is moved by up to
+# +/- OPTIONS_GAMMA_SCAN_RANGE in OPTIONS_GAMMA_SCAN_STEP steps (INVENTED grid).
+# No sign change inside the range means no flip (and so no `amplify`).
+OPTIONS_GAMMA_SCAN_RANGE = 0.10
+OPTIONS_GAMMA_SCAN_STEP = 0.005
+
+# "25-delta skew": put IV minus call IV at |delta| 0.25, taken from the instrument
+# nearest that delta; both sides must lie within the tolerance (INVENTED) or the skew is NULL.
+OPTIONS_SKEW_DELTA = 0.25
+OPTIONS_SKEW_DELTA_TOLERANCE = 0.10
+
+# "Yang-Zhang realized vol of that same length": 1h bars, as many as the expiry's
+# hours to expiry, never fewer than the M3 convention (24) nor more than this cap
+# (INVENTED: 30 days).
+OPTIONS_RV_MAX_BARS = 720
+
+# The 90-day percentiles of IV-minus-RV and skew are taken against history thinned to one stored
+# metric per this many minutes (the first of each wall-clock bucket), so a 5-minute poll does not
+# make 12 near-identical samples of one hour (INVENTED: 60, the 1h bar the RV is built from).
+OPTIONS_PERCENTILE_SAMPLE_MINUTES = 60
+
+# `options_confidence` is book depth: total open interest over this multiple of the
+# per-coin floor, capped at 1. Without a configured floor it is NULL (INVENTED multiple).
+OPTIONS_CONFIDENCE_FULL_AT_FLOOR_MULTIPLE = 2.0
+
+# `options_influence` records the STRUCTURAL verdict for later tests (not a
+# multiplier on P). Sign only, so no magnitude is invented: a tailwind for the
+# trade is +1, a headwind / pin / dampening is -1, no information is 0.
+OPTIONS_INFLUENCE_BY_VERDICT = MappingProxyType(
+    {
+        'ignore': 0.0,
+        'expiry_pin': -1.0,
+        'headwind': -1.0,
+        'amplify': 1.0,
+        'dampen': -1.0,
+        'align': 0.0,
+    }
+)
+
+# Machine-readable `candidate.status_reason` codes written by the options check.
+STATUS_REASON_OPTIONS_IGNORED_PREFIX = 'options_ignored:'  # + one of the OPTIONS_IGNORE_* codes
+OPTIONS_IGNORE_NO_BOOK_FOR_COIN = 'no_options_book'  # the coin has no Deribit book (alts)
+OPTIONS_IGNORE_NO_SNAPSHOT = 'no_snapshot'  # a covered coin with no visible snapshot / metric
+OPTIONS_IGNORE_SNAPSHOT_TOO_OLD = 'snapshot_stale'  # older than OPTIONS_SNAPSHOT_MAX_AGE_MINUTES at the decision
+OPTIONS_IGNORE_OI_FLOOR_UNSET = 'oi_floor_unset'  # OPTIONS_OI_FLOOR_BY_COIN has no entry for the coin
+OPTIONS_IGNORE_OI_BELOW_FLOOR = 'oi_below_floor'
+OPTIONS_IGNORE_METRIC_INCOMPLETE = 'metric_incomplete'  # the snapshot's total open interest is unknown
+STATUS_REASON_OPTIONS_EXPIRY_PIN = 'options:expiry_pin'  # status `delayed`
+STATUS_REASON_OPTIONS_HEADWIND_ROOM = 'options:headwind_room'  # status `cancelled`
 
 # ---------------------------------------------------------------------------
 # Pools, edge line, abstain rule, calibration, interval

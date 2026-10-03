@@ -10,6 +10,7 @@ Job                        Default    What it does
 ``binance_funding_settled``  300 s    settled prints, stamped at the print
 ``binance_funding_predicted`` 60 s    the current estimated rate
 ``feed_health``            60 s       recompute staleness for every feed
+``deribit_options_book``   300 s      public Deribit book, BTC/ETH (only with ``deribit_enabled``)
 (stream)                   always on  ``!forceOrder@arr`` consumer (own thread)
 =========================  =========  =======================================
 
@@ -39,18 +40,28 @@ from app.core.hashing import code_version
 from app.core.time import UTC, utc_now
 from app.worker.feeds import health
 from app.worker.feeds.binance import BinanceClient
-from app.worker.jobs import JOBS, WorkerContext, job_intervals, reap_orphaned_runs, run_job
+from app.worker.feeds.deribit import DeribitClient
+from app.worker.jobs import (
+    JOBS,
+    OPTIONS_JOBS,
+    WorkerContext,
+    job_intervals,
+    options_job_intervals,
+    reap_orphaned_runs,
+    run_job,
+)
 from app.worker.stream import ForceOrderRunner
 
 log = logging.getLogger(__name__)
 
 
-def build_context(client: BinanceClient | None = None) -> WorkerContext:
+def build_context(client: BinanceClient | None = None, deribit: DeribitClient | None = None) -> WorkerContext:
     settings = get_settings()
     _ = settings.watchlist_symbols  # raises on a bad watchlist before anything starts
     return WorkerContext(
         settings=settings,
         client=client or BinanceClient(settings=settings),
+        deribit=deribit if deribit is not None else (DeribitClient(settings=settings) if settings.deribit_enabled else None),
         session_factory=get_sync_session_factory(),
         attempts=health.AttemptLog(),
         code_version=code_version(),  # shells out to git: once per run, never per row
@@ -75,6 +86,17 @@ def build_scheduler(ctx: WorkerContext, *, start_at: datetime | None = None) -> 
             name=name,
             next_run_time=first + timedelta(seconds=2 * index),  # stagger the first runs
         )
+    if ctx.deribit is not None:  # the optional public Deribit poller (Milestone 5)
+        for name, seconds in options_job_intervals(ctx.settings).items():
+            scheduler.add_job(
+                run_job,
+                trigger='interval',
+                seconds=seconds,
+                args=[ctx, name, OPTIONS_JOBS[name]],
+                id=name,
+                name=name,
+                next_run_time=first + timedelta(seconds=11),
+            )
     return scheduler
 
 
@@ -130,6 +152,8 @@ class Worker:
             run_job(self.ctx, 'feed_health', JOBS['feed_health'])
         finally:
             self.ctx.client.close()
+            if self.ctx.deribit is not None:
+                self.ctx.deribit.close()
             dispose_sync_engine()
         log.info('worker stopped')
 
@@ -138,4 +162,7 @@ class Worker:
         results: dict[str, str] = {}
         for name, fn in JOBS.items():
             results[name] = run_job(self.ctx, name, fn)
+        if self.ctx.deribit is not None:
+            for name, fn in OPTIONS_JOBS.items():
+                results[name] = run_job(self.ctx, name, fn)
         return results

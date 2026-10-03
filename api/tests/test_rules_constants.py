@@ -11,7 +11,7 @@ from app.core import constants as C
 from app.core import hashing as H
 from app.models import enums as E
 
-#: The hash at RULE_VERSION phase1-v3. If this changes, a frozen rule changed: bump the version on purpose.
+#: The hash at RULE_VERSION phase1-v4 (Milestone 5 added the options constants). If this changes, a frozen rule changed: bump the version on purpose.
 
 M4_NAMES = (
     'TRIGGER_SWING_BREAK',
@@ -40,8 +40,8 @@ M4_NAMES = (
 )
 
 
-def test_rule_version_is_phase1_v3():
-    assert C.RULE_VERSION == 'phase1-v3'
+def test_rule_version_is_phase1_v4():
+    assert C.RULE_VERSION == 'phase1-v4'
 
 
 def test_every_m4_constant_is_in_the_rule_hash_payload_and_serializable():
@@ -137,4 +137,4 @@ def test_the_swing_break_trigger_decision_is_recorded_as_a_constant(name):
     assert getattr(C, name) == 'event'
 
 
-PINNED_RULE_HASH = 'eb32a9d4140c5c55691d74d8c278adcb83860e3d68cf42d07ad8b3a7a3923dff'
+PINNED_RULE_HASH = 'c13d04dd3d5b3970aaae23bce7be26e5e3d6539e7b361c5e459a04908f4631cd'

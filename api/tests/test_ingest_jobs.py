@@ -7,7 +7,7 @@ import asyncio
 import re
 import threading
 import time
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -22,6 +22,10 @@ from app.worker.feeds import health
 from app.worker.feeds.http import RetryPolicy
 from ingest_helpers import NOW, at, exchange, make_settings, session_factory, worker_context  # noqa: F401
 from test_ingest_forceorder import Clock, Script, event
+
+#: The scheduler runs on the wall clock, so "never fires during the test" has to be far past any wall-clock
+#: date. (It was `NOW + 1 day`, a fixed instant that the real clock overtook, which made this suite flaky.)
+FAR_FUTURE = datetime(2100, 1, 1, tzinfo=timezone.utc)
 
 UTC = timezone.utc
 
@@ -170,7 +174,7 @@ def test_job_intervals_sit_inside_the_spec_one_to_five_minutes():
 # scheduler & worker
 # ---------------------------------------------------------------------------
 def test_every_job_is_registered_once_and_cannot_overlap_itself(worker_context):
-    sched = scheduler.build_scheduler(worker_context, start_at=NOW + timedelta(days=1))
+    sched = scheduler.build_scheduler(worker_context, start_at=FAR_FUTURE)
     sched.start(paused=True)  # job defaults are applied when jobs are really added; paused: nothing runs
     try:
         registered = {job.id: job for job in sched.get_jobs()}
@@ -189,7 +193,7 @@ def test_every_job_is_registered_once_and_cannot_overlap_itself(worker_context):
 def quiet_worker(monkeypatch, worker_context):
     """A Worker whose scheduled jobs never fire during the test (they would share the test's one connection)."""
     original = scheduler.build_scheduler
-    monkeypatch.setattr(scheduler, 'build_scheduler', lambda ctx: original(ctx, start_at=NOW + timedelta(days=1)))
+    monkeypatch.setattr(scheduler, 'build_scheduler', lambda ctx: original(ctx, start_at=FAR_FUTURE))
     monkeypatch.setattr(scheduler, 'dispose_sync_engine', lambda: None)
     return scheduler.Worker(worker_context, with_stream=False)
 

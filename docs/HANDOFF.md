@@ -15,10 +15,11 @@ Private paper-only crypto signals loop on the Win10 laptop: ingest → features 
 | M2 Binance ingest | done | `25aec17` |
 | M3 Feature engine | done | `dfc9ba9` |
 | M3.1 Pre-M4 decisions | done | see `git log` (commit after `dfc9ba9`) |
-| M4 Frozen rules | done | see `git log` (commit after `048eb77`) |
-| M5–M10 | pending | — |
+| M4 Frozen rules | done | `3ba592a` |
+| M5 Options check | done | see `git log` (commit after `3ba592a`) |
+| M6–M10 | pending | — |
 
-Working tree clean. **951 tests pass.** DB `signals` at Alembic head `a41f7c05d2e9`. `RULE_VERSION = 'phase1-v3'`, `rule_hash = eb32a9d4140c5c55691d74d8c278adcb83860e3d68cf42d07ad8b3a7a3923dff`.
+Working tree clean. **1158 tests pass.** DB `signals` at Alembic head `c52e9b8a4f17`. `RULE_VERSION = 'phase1-v4'`, `rule_hash = c13d04dd3d5b3970aaae23bce7be26e5e3d6539e7b361c5e459a04908f4631cd`.
 
 ## Decisions locked
 
@@ -32,10 +33,11 @@ Working tree clean. **951 tests pass.** DB `signals` at Alembic head `a41f7c05d2
 - **Engine params are in `rule_hash`.** `params.py` stays its own file. `hashing.frozen_engine_params()` lists its public UPPERCASE values explicitly under a separate `engine_params` key (`FUNDING_MAX_AGE` → `FUNDING_MAX_AGE_SECONDS` int, `PRODUCTION_POLICY` → dict of its fields). A guard test fails if `params.py` gains a name that isn't listed. `config.py` values (lags, settle, `WATCHLIST`) are NOT hashed.
 - **Swing break = event + state, both stateless.** `swing_break_event`: the latest completed 4h close is beyond swing S, the previous 4h close was not, and this 15m bar's close is that 4h close. No grace window. `swing_break_state` (direction permission for the 15m triggers): the 4h close is beyond S and `chandelier_stop_distance_atr > 0`. It ends when a 4h close moves back through S or the distance is <= 0. `swing_break_direction` gives the side for both. Old column `swing_break` was renamed to `swing_break_state`.
 - **M4 rules.** `swing_break` trigger fires on the event; the state is only the direction permission. Setup families frozen (CHECK): `breakout`, `pullback`, `squeeze`, `reversion`, 1:1 from the trigger. Direction vote `MIN_NET = 0` (the break direction stands unless the opposing votes outnumber the confirming ones; owner-confirmed). Candidates are created `watch` + `pending_options_check`; `stop_price` holds the pre-options stop until M5 overwrites it. Locked book = sha256 of `{coin, bar_close}` mod 5. Full list in the M4 entry of `BUILD-LOG.md`.
+- **M5 options.** OI floors owner-set: BTC 100,000, ETH 400,000 (coin units, about 30% of the 2026-10-03 books); confidence full at 2x the floor. With a stale, missing or thin book, BTC/ETH get `ignore` and stay `watch`; alts (no Deribit book) proceed. Deribit staleness does NOT stand the whole book down (owner-confirmed). Large expiry = nearest expiry >= 5% of total OI; near-dated = 72h. `expiry_pin` -> `delayed`; headwind with < 0.5R room -> `cancelled`. Full list in the M5 entry of `BUILD-LOG.md`.
 
 ## Open
 
-Per-coin options OI floor + “large expiry” (M5); independent sample = group first row vs mean (M8). M3.1 Ambiguity 1: the state is measured against the last confirmed swing, so a new swing that forms after the break can end it early. Revisit if replay shows it matters.
+Independent sample = group first row vs mean (M8). M3.1 Ambiguity 1: the state is measured against the last confirmed swing, so a new swing that forms after the break can end it early. Revisit if replay shows it matters.
 
 ## Key files
 
@@ -70,8 +72,8 @@ Subagents don't see the chat. Each brief must name the milestone, point to this 
 
 ## Next step
 
-1. Run **M5 — options check** (Sonnet 5.5 high subagent, Bugbot review): Deribit ingest with `available_at` lag, the options verdict on `watch` + `pending_options_check` candidates, `stop_price` / `target_cap_price`, headwind cancel. Decide the per-coin OI floor and "large expiry", and how cancelled shadow rows with NULL options are handled. Read the M4 entry for the candidate price layers and status codes.
-2. Then M6 labeler → M7 replay → M8 stats → M9 API/UI → M10 gate.
+1. Run **M6 — barrier labeler** (Sonnet 5.5 high subagent, Bugbot review): write `entry_price` (next bar's open), `one_r`, barrier prices and `vertical_deadline` exactly once; label first barrier hit with no lookahead; labels carry `feature_hash`, `rule_hash`, `code_version`. Label shadow rows too. Read the M4 and M5 entries for the price layers (`stop_price`, `target_cap_price`) and statuses.
+2. Then M7 replay (decide covered-coin replay rows without Deribit history) → M8 stats → M9 API/UI → M10 gate.
 
 Local run (from `repo/api`):
 

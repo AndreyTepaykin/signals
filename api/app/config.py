@@ -83,6 +83,27 @@ class Settings(BaseSettings):
     binance_spot_url: str = 'https://api.binance.com'
     binance_futures_ws_url: str = 'wss://fstream.binance.com'
 
+    # -- Deribit public market data (Milestone 5). No API key, no private endpoint, ever. --
+    deribit_url: str = 'https://www.deribit.com'
+    #: Poll the Deribit book from the live worker. The Binance feeds do not depend on it.
+    deribit_enabled: bool = True
+    #: Spec section 12: "Deribit book (BTC, ETH) | a few minutes". The options check calls a snapshot
+    #: stale after 15 minutes, so 5 minutes leaves two missed polls of slack.
+    feed_deribit_poll_seconds: int = Field(300, ge=30, le=300)
+    #: MEASURED, not a rule. A book summary row carries ``creation_timestamp`` (the snapshot instant).
+    #: Measured 2026-10-03 (public ``get_book_summary_by_currency``, 7 requests, BTC and ETH): the
+    #: summary was 0.9 to 2.4 s old when the response arrived (server cache up to ~0.9 s plus transfer
+    #: and our own clock), and every row of one response carried a creation_timestamp within 10-16 ms
+    #: of the others. ``available_at = max(snapshot_time + this, time we received it)``. Chosen 10 s
+    #: (4x the worst sample); errs late, like the Binance lags, so replay never knows a book earlier than live did.
+    feed_deribit_publication_lag_seconds: int = Field(10, ge=0, le=300)
+    #: Also write an ``event_calendar`` row (kind ``expiry``, ``is_large`` decided by
+    #: ``LARGE_EXPIRY_MIN_OI_SHARE``) for each expiry that enters the 48h window. OFF by default:
+    #: any calendar row makes ``feature_row.event_flag`` read FALSE ("no event") instead of NULL
+    #: ("unknown") for CPI and FOMC too, and the owner has not loaded those yet. Turn it on once the
+    #: macro calendar is loaded.
+    deribit_write_expiry_calendar: bool = False
+
     # -- polling intervals, seconds. Spec section 12: "1-5 min". ------------
     feed_kline_poll_seconds: int = Field(60, ge=30, le=300)
     feed_open_interest_poll_seconds: int = Field(120, ge=30, le=300)

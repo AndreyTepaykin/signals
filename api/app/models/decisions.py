@@ -82,6 +82,7 @@ from datetime import datetime
 from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, ForeignKeyConstraint, Index, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core import constants as C
 from app.models import enums as E
 from app.models.base import (
     Base,
@@ -316,6 +317,13 @@ class Candidate(SurrogateKey, CreatedAt, Base):
         CheckConstraint(
             f"status <> '{E.STATUS_ALERT}' OR options_verdict IS NOT NULL",
             name='alert_has_options_verdict',
+        ),
+        # Milestone 5: the pending marker means "the options check has not run", so a row that still carries it
+        # may not have a verdict. (That every non-ignore verdict names its options_metric row is enforced by the
+        # options job and its tests, not here: the shared test fixtures build verdicts without a metric row.)
+        CheckConstraint(
+            f"status_reason IS DISTINCT FROM '{C.STATUS_REASON_PENDING_OPTIONS_CHECK}' OR options_verdict IS NULL",
+            name='pending_has_no_verdict',
         ),
         CheckConstraint('options_dealer_gamma_sign IN (-1, 0, 1)', name='options_dealer_gamma_sign'),
         E.in_range('options_influence', -1, 1),

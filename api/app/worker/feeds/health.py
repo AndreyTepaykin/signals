@@ -80,15 +80,20 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
+from app.core import constants as C
 from app.core.time import ensure_utc
 from app.models import enums as E
 from app.models.as_of import as_of
 from app.models.feeds import Candle, FeedHealth, Funding, OpenInterest
+from app.models.options import OptionsSnapshot
 from app.worker.feeds import records as R
 
 FEED_FUNDING_SETTLED = 'binance_funding_settled'
 FEED_FUNDING_PREDICTED = 'binance_funding_predicted'
 FEED_FORCE_ORDER = 'binance_force_order'
+#: The Deribit public book, one row per options coin (BTC, ETH). Added to the expected feeds only on request
+#: (`include_options`): see `expected_feeds`.
+FEED_DERIBIT_BOOK = 'deribit_options_book'
 
 #: Feeds that do not take part in the stand-down rule (see module docstring).
 NON_GATING_FEEDS = frozenset({FEED_FORCE_ORDER})
@@ -137,8 +142,19 @@ class FeedSpec:
     reason: str = ''  # how the limit was derived, for humans
 
 
-def expected_feeds(settings: Settings | None = None, coins: Iterable[str] | None = None) -> list[FeedSpec]:
-    """Every (feed, coin) the live worker is supposed to keep fresh, with its limit."""
+def expected_feeds(
+    settings: Settings | None = None,
+    coins: Iterable[str] | None = None,
+    *,
+    include_options: bool = False,
+) -> list[FeedSpec]:
+    """Every (feed, coin) the live worker is supposed to keep fresh, with its limit.
+
+    ``include_options`` adds the Deribit book (BTC and ETH only, limit = the spec's 15 minutes). It is
+    opt-in because a Deribit outage must not stand down alts or the Binance-only gates: the options check
+    turns a stale book into ``ignore`` by itself. Callers that want the feed treated as a gating feed
+    (``refresh_feed_health``, ``stand_down_breaches``) pass the flag.
+    """
     settings = settings or get_settings()
     coins = tuple(coins) if coins is not None else settings.watchlist_symbols
     grace = settings.feed_staleness_grace_seconds
@@ -197,6 +213,24 @@ def expected_feeds(settings: Settings | None = None, coins: Iterable[str] | None
                 reason=f'rolling estimate: {predicted_poll}s poll + {grace}s grace',
             )
         )
+    if include_options:
+        poll = settings.feed_deribit_poll_seconds
+        limit = C.OPTIONS_SNAPSHOT_MAX_AGE_MINUTES * 60
+        for coin in coins:
+            if coin in C.OPTIONS_CURRENCY_BY_COIN:
+                specs.append(
+                    FeedSpec(
+                        FEED_DERIBIT_BOOK,
+                        coin,
+                        poll,
+                        poll,
+                        limit,
+                        reason=(
+                            f'spec: a Deribit snapshot older than {C.OPTIONS_SNAPSHOT_MAX_AGE_MINUTES} minutes is stale '
+                            f'(measured from available_at = snapshot + {settings.feed_deribit_publication_lag_seconds}s lag)'
+                        ),
+                    )
+                )
     specs.append(
         FeedSpec(
             FEED_FORCE_ORDER,
@@ -307,6 +341,13 @@ def _latest_print(session: Session, now: datetime, spec: FeedSpec) -> tuple[date
             .order_by(Funding.available_at.desc())
             .limit(1)
         )
+    elif spec.feed == FEED_DERIBIT_BOOK:
+        statement = (
+            reader.select(OptionsSnapshot.snapshot_time, OptionsSnapshot.available_at)
+            .where(OptionsSnapshot.venue == E.OPTIONS_VENUE_DERIBIT, OptionsSnapshot.coin == coin)
+            .order_by(OptionsSnapshot.snapshot_time.desc())
+            .limit(1)
+        )
     else:
         raise ValueError(f'no reader for feed {spec.feed!r}')
     row = session.execute(statement).first()
@@ -323,6 +364,9 @@ def _rows_in_window(session: Session, now: datetime, spec: FeedSpec, window: tim
         period = spec.feed.removeprefix('binance_open_interest_')
         where = [OpenInterest.coin == spec.coin, OpenInterest.timeframe == period, OpenInterest.available_at > since]
         stmt = as_of(now).gate(sa_select(func.count(OpenInterest.id)).where(*where))
+    elif spec.feed == FEED_DERIBIT_BOOK:
+        where = [OptionsSnapshot.venue == E.OPTIONS_VENUE_DERIBIT, OptionsSnapshot.coin == spec.coin, OptionsSnapshot.available_at > since]
+        stmt = as_of(now).gate(sa_select(func.count(OptionsSnapshot.id)).where(*where))
     else:
         kind = E.FUNDING_SETTLED if spec.feed == FEED_FUNDING_SETTLED else E.FUNDING_PREDICTED
         where = [Funding.coin == spec.coin, Funding.kind == kind, Funding.available_at > since]
@@ -337,6 +381,7 @@ def refresh_feed_health(
     attempts: AttemptLog,
     settings: Settings | None = None,
     coins: Iterable[str] | None = None,
+    include_options: bool = False,
 ) -> list[FeedStatus]:
     """Recompute and store the health row of every gating feed. Does not commit.
 
@@ -352,7 +397,7 @@ def refresh_feed_health(
     statuses: list[FeedStatus] = []
     values: list[dict[str, Any]] = []
 
-    for spec in expected_feeds(settings, coins):
+    for spec in expected_feeds(settings, coins, include_options=include_options):
         if not spec.gating:
             continue
         printed, available = _latest_print(session, now, spec)
@@ -472,8 +517,13 @@ def stand_down_breaches(
     now: datetime,
     settings: Settings | None = None,
     coins: Iterable[str] | None = None,
+    *,
+    include_options: bool = False,
 ) -> list[FeedBreach]:
     """Gating feeds that are past their available-at rule at ``now``. Empty means clear.
+
+    ``include_options=True`` also judges the Deribit book (BTC and ETH, 15 minutes). The rules job does NOT pass
+    it: a stale book is an ``ignore`` verdict for that coin, not a stand-down of every candidate.
 
     A feed counts as a breach when it has no ``feed_health`` row at all, never
     produced a row, has no staleness rule configured (NULL is "no rule", never
@@ -485,7 +535,7 @@ def stand_down_breaches(
         (row.feed, row.coin): row for row in session.execute(sa_select(FeedHealth)).scalars()
     }
     breaches: list[FeedBreach] = []
-    for spec in expected_feeds(settings, coins):
+    for spec in expected_feeds(settings, coins, include_options=include_options):
         if not spec.gating:
             continue
         row = rows.get((spec.feed, spec.coin))

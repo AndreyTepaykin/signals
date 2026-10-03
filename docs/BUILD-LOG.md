@@ -688,3 +688,55 @@ Turns a `feature_row`, read through the `as_of` gate, into `candidate` rows: dir
 ### Verification
 - `cd repo/api; & '.\.venv\Scripts\python.exe' -m pytest -q` -> **`951 passed in 186.56s`** (800 before + 151 new), rerun by the orchestrator.
 - `alembic current` = `a41f7c05d2e9 (head)`; the implementer round-tripped downgrade/upgrade.
+
+## M5 - Options check
+
+- Date: 2026-10-03
+- Model: Claude Sonnet 5.5 high (implementer), Bugbot review (no findings), Claude Opus 5.5 (orchestrator; set the owner's OI floors)
+
+Deribit public book-summary ingest (BTC, ETH), pure options metrics, a pure options check, and a worker job that records a verdict exactly once on every candidate still marked `pending_options_check`. Public endpoints only, no keys.
+
+### Files created or modified
+- `repo/api/app/core/options/` (new, pure): `book.py` (instrument parsing, `OptionQuote`, `OptionsBook`, `book_from_payload`), `greeks.py` (Black-76 delta/gamma, r=0), `metrics.py`, `check.py`.
+- `repo/api/app/worker/feeds/deribit.py` (new) - `DeribitClient`, `parse_book_summary`.
+- `repo/api/app/worker/options_ingest.py` (new) - idempotent snapshot ingest, CLI, opt-in expiry-calendar writer.
+- `repo/api/app/worker/options_job.py` (new) - the check over pending candidates, CLI.
+- `repo/api/app/worker/feeds/availability.py` (`options_snapshot_available_at`), `feeds/health.py` (`FEED_DERIBIT_BOOK`, `include_options`), `jobs.py` (`job_deribit_book`, Deribit orphan reaping), `scheduler.py` (registers the Deribit poll).
+- `repo/api/app/core/constants.py` - `RULE_VERSION = 'phase1-v4'`, the M5 constants, the owner's OI floors.
+- `repo/api/app/config.py` - `deribit_url`, `deribit_enabled`, `feed_deribit_poll_seconds` (300), `feed_deribit_publication_lag_seconds` (10, measured 0.9-2.4 s), `deribit_write_expiry_calendar` (False). Not hashed.
+- `repo/api/app/models/decisions.py` + `alembic/versions/20261003_2100_c52e9b8a4f17_options_check_constraints.py` - CHECK `ck_candidate_pending_has_no_verdict`; payload comment.
+- Tests: `test_options_metrics.py`, `test_options_check.py`, `test_options_job.py`, `test_deribit.py`, `test_options_constants.py`, `options_helpers.py`, fixture `fixtures/deribit_book_summary_btc.json`; re-pins in `test_hashing.py` / `test_rules_constants.py`; `test_ingest_config.py` (`ALLOWED_PATHS` gains the Deribit public path, plus a test that every Deribit path is public); `test_ingest_jobs.py` (a "never fires" start time of `NOW + 1 day` had become the past; now `FAR_FUTURE` = 2100-01-01).
+
+### Contracts frozen
+- `DeribitClient(http, settings, clock, retry).book_summary(currency)`: one GET, `/api/v2/public/get_book_summary_by_currency?kind=option`; `KeyError` for unlisted currencies.
+- `parse_book_summary(response, currency, *, fetched_at, publication_lag) -> SnapshotRecord`: `snapshot_time` = lower median `creation_timestamp`, index = lower median `estimated_delivery_price`, compact payload (original keys, rows with OI > 0).
+- `options_snapshot_available_at(snapshot_time, fetched_at, publication_lag) = max(snapshot_time + lag, fetched_at)`; a negative lag raises.
+- `ingest_snapshot(session, record, *, write_calendar=False) -> IngestResult` (ON CONFLICT DO NOTHING, never commits); `ingest_coin(...)` (SAVEPOINT).
+- `FEED_DERIBIT_BOOK = 'deribit_options_book'`, limit 900 s from `available_at`. `expected_feeds` / `refresh_feed_health` / `stand_down_breaches` take `include_options=False`: **Deribit staleness does not stand the book down** (owner-confirmed); it makes the covered coin `ignore` instead.
+- `derive_horizon_metrics(book, horizon, hourly_bars=(), bars_as_of=None) -> HorizonMetrics`; `max_pain`, `strike_profile`, `skew_25d`, `atm_iv`, `same_tenor_rv` (reuses `yang_zhang_vol`), `dealer_gamma`, `is_large_expiry`.
+- `check_options(inputs: CheckInputs) -> OptionsDecision` (verdict, vol tag, expression, `stop_price`, `target_cap_price`, status, `status_reason`, confidence, metric id/time). Verdict precedence `ignore -> expiry_pin -> headwind -> amplify -> dampen -> align`.
+- `options_job`: `pending_candidates`, `load_book_view` (reads through `as_of(decision_time)`), `load_check_inputs` (re-derives `stop_plan` and refuses to write if it does not match the stored `pre_options_*`), `check_candidate(session, candidate, *, dry_run=False)` (guarded `UPDATE ... WHERE options_verdict IS NULL`; outcomes `checked` / `already_checked` / `dry_run` / `price_mismatch` / `no_feature_row`), `run_options_job(session, *, source=None, coins=None, dry_run=False) -> OptionsReport`. No clock; M7 reuses it. Not scheduled yet.
+- **Verdict effects:** `ignore` -> reason `options_ignored:<code>` (`no_options_book`, `no_snapshot`, `snapshot_stale`, `oi_floor_unset`, `oi_below_floor`, `metric_incomplete`); covered coins (BTC, ETH) stay `watch`, alts with no book proceed (`OPTIONS_IGNORE_BLOCKS_ALERT_ON_COVERED_COINS = True`). `expiry_pin` -> target capped at max pain, status `delayed`, reason `options:expiry_pin`. `headwind` -> target capped at the strike in the path; `cancelled` with `options:headwind_room` if under 0.5R of room is left. `amplify` -> `stop_price` widened (`lower_barrier_price = stop_price` still holds). `dampen` -> target cap (`DAMPEN_TARGET_CAP_R`). `align` -> no price change. Otherwise `alert`.
+- **Shadow rows** (M4 stand-down, CVD, vote-conflict) get the verdict, prices and metric recorded but keep their status and reason.
+- **OI floor (owner-set):** `OPTIONS_OI_FLOOR_BY_COIN = {'BTCUSDT': 100_000.0, 'ETHUSDT': 400_000.0}`, coin units of total Deribit option OI, about 30% of the 2026-10-03 books (BTC 349k, ETH 1.33M). Confidence = total OI / (2 x floor), capped at 1, so it is full above 200k BTC / 800k ETH. A coin with no entry is `oi_floor_unset`, never treated as met.
+- **`rule_hash()` at `phase1-v4` = `c13d04dd3d5b3970aaae23bce7be26e5e3d6539e7b361c5e459a04908f4631cd`.** Alembic head `c52e9b8a4f17`.
+
+### Deferred to a later milestone
+- Entry price, 1R, barriers -> M6. Covered-coin replay rows (Deribit has no history) -> M7. Scheduling `options_job` -> M10. Expiry weighting of path strikes; CPI/FOMC calendar.
+
+### Ambiguities (choices made; owner accepted the invented numbers at review)
+1. `ignore` vs "stale data must not alert": resolved by `OPTIONS_IGNORE_BLOCKS_ALERT_ON_COVERED_COINS` (spec-literal behaviour is `False`, tested).
+2. Dealer-gamma proxy `dealers_long_calls_short_puts`; flip scanned over +/-10% of index in 0.5% steps (invented grid).
+3. Near-dated = within 72 h (`LONGEST_HORIZON_HOURS`); large expiry = nearest expiry holds >= 5% of total OI (invented).
+4. 25-delta skew with delta tolerance 0.10; RV cap 720 bars; percentile thinned to one sample per 60 min; sign-only `options_influence` (all invented).
+5. `expiry_pin` -> `delayed`; Phase 1 does not re-evaluate delayed rows.
+6. The expiry-calendar writer is opt-in: `assemble` ignores `coin` on events, so a BTC expiry row would stand down ETH.
+7. Snapshot payload is compact, not verbatim.
+8. A CHECK that a verdict names its metric was dropped (fixtures set `align` with no metric); the job enforces it.
+9. `OPTIONS_IGNORE_STALE` renamed `OPTIONS_IGNORE_SNAPSHOT_TOO_OLD` (reason `snapshot_stale`) because an existing guard bans "STALE" in hashed names.
+
+### Verification
+- `cd repo/api; & '.\.venv\Scripts\python.exe' -m pytest -q` -> **`1158 passed in 215.60s`** with the floors set (951 before + 207 new), run by the orchestrator.
+- `alembic current` = `c52e9b8a4f17 (head)`; implementer ran upgrade, `downgrade -1`, upgrade.
+- Bugbot over the uncommitted diff: no findings.
+

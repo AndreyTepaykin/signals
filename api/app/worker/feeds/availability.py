@@ -13,7 +13,11 @@ Binance funding        Last **settled** print        ``funding_time + lag`` (MEA
 Binance funding        (live carry band reads the    ``observed_at``
 (predicted)            current rate)
 Binance force orders   Print time. Stream is partial ``traded_at``
+Deribit public book    Snapshot time                 ``max(snapshot_time + lag, fetched_at)`` (MEASURED lag)
 =====================  ============================  ===============================
+
+(The Deribit rule is ``options_snapshot_available_at``; the book cannot be backfilled, so the
+moment we received it is also a floor.)
 
 The two ``lag`` values are measured infrastructure facts (``app/config.py``), deliberately conservative.
 Using the bare boundary for open interest was lookahead bias: Binance serves a 15m/1h/4h sample up to ~3 minutes
@@ -93,3 +97,16 @@ def funding_predicted_available_at(observed_at: datetime) -> datetime:
 def force_order_available_at(traded_at: datetime) -> datetime:
     """A liquidation print is knowable at its print time."""
     return ensure_utc(traded_at)
+
+
+def options_snapshot_available_at(snapshot_time: datetime, fetched_at: datetime, publication_lag: timedelta) -> datetime:
+    """A Deribit book snapshot is knowable at the LATER of its (lagged) snapshot instant and the moment we received it.
+
+    ``snapshot_time`` is the venue's ``creation_timestamp``; ``fetched_at`` is when the response reached
+    us (the book is not backfillable, so this is the only moment it could have been known).
+    ``publication_lag`` is required (no default): ``Settings.feed_deribit_publication_lag_seconds``.
+    The result is never earlier than ``fetched_at``, so a stored snapshot cannot claim knowledge the worker did not have.
+    """
+    if publication_lag < timedelta(0):
+        raise ValueError('publication_lag must not be negative')
+    return max(ensure_utc(snapshot_time) + publication_lag, ensure_utc(fetched_at))

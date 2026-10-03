@@ -27,7 +27,7 @@ from app.models.base import AtrUnits, Base, FeedRow, Hours, Price, Quantile, Rat
 
 
 class OptionsSnapshot(FeedRow, Base):
-    """One raw public-book snapshot, stored verbatim.
+    """One public-book snapshot, stored compactly (see ``app.worker.feeds.deribit`` for exactly what is kept).
 
     ``snapshot_time`` is the venue's snapshot instant (economic); ``available_at``
     is when we had it. The 15-minute staleness rule that turns a verdict into
@@ -42,7 +42,10 @@ class OptionsSnapshot(FeedRow, Base):
     snapshot_time: Mapped[datetime] = mapped_column(nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(
         nullable=False,
-        comment='Raw venue response, unmodified, so a metric can be recomputed later.',
+        comment=(
+            'Compact venue book: currency, index_price and, per instrument with open interest above zero, '
+            'the original Deribit keys. Enough to recompute every metric; not the full response.'
+        ),
     )
     instrument_count: Mapped[int | None] = mapped_column(nullable=True)
     total_open_interest: Mapped[Size | None] = mapped_column(

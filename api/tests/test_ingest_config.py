@@ -128,6 +128,9 @@ ALLOWED_PATHS = {
     '/fapi/v1/fundingInfo',
     '/fapi/v1/premiumIndex',
     '/futures/data/openInterestHist',
+    # Milestone 5: Deribit's PUBLIC book summary (no key, no private method). The test below also pins
+    # every Deribit path to the /api/v2/public/ prefix.
+    '/api/v2/public/get_book_summary_by_currency',
 }
 FORBIDDEN_IDENTIFIERS = {'signature', 'api_key', 'apikey', 'api_secret', 'secret', 'secret_key', 'hmac', 'listen_key', 'listenkey', 'post', 'put', 'delete', 'patch'}
 FORBIDDEN_PATH = re.compile(r'/(api|fapi|sapi|dapi|papi|eapi)/v\d+/(order|batchOrders|allOpenOrders|listenKey|account|positionRisk|balance|leverage|marginType|userDataStream)', re.I)
@@ -146,6 +149,17 @@ def test_every_binance_path_in_the_worker_is_a_public_market_data_endpoint():
                 seen.add(node.value)
                 assert not FORBIDDEN_PATH.search(node.value), f'{path.name}: trading or account endpoint {node.value}'
     assert seen == ALLOWED_PATHS
+
+
+def test_every_deribit_path_is_a_public_endpoint():
+    deribit = {
+        node.value
+        for _path, tree in worker_trees()
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.startswith('/api/v2/')
+    }
+    assert deribit == {'/api/v2/public/get_book_summary_by_currency'}
+    assert all(path.startswith('/api/v2/public/') for path in deribit)
 
 
 def test_the_worker_has_no_signing_no_keys_and_only_read_verbs():

@@ -28,12 +28,14 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
+from app.core import constants as C
 from app.core.time import utc_now
 from app.models import enums as E
 from app.models.observability import JobRun
 from app.worker.feeds import health, sync
 from app.worker.feeds import records as R
 from app.worker.feeds.binance import OPEN_INTEREST_HISTORY_DAYS, BinanceClient
+from app.worker.feeds.deribit import DeribitClient
 from app.worker.feeds.http import GeoBlocked, RateLimited
 
 log = logging.getLogger(__name__)
@@ -53,6 +55,10 @@ LIVE_JOB_NAMES = (
     JOB_FEED_HEALTH,
     JOB_FORCE_ORDER_STREAM,
 )
+#: The Deribit poller. Separate from `LIVE_JOB_NAMES` / `JOBS`: it exists only when the worker holds a
+#: Deribit client (`WorkerContext.deribit`), so the Binance-only worker is unchanged.
+JOB_DERIBIT_BOOK = 'deribit_options_book'
+OPTIONS_JOB_NAMES = (JOB_DERIBIT_BOOK,)
 
 #: How much history a brand-new database gets from the live worker. Deeper
 #: history is the backfill CLI's job.
@@ -69,6 +75,8 @@ class WorkerContext:
     session_factory: sessionmaker[Session]
     attempts: health.AttemptLog
     code_version: str
+    #: Public Deribit client; `None` disables the options poller and leaves `feed_health` Binance-only.
+    deribit: DeribitClient | None = None
     #: Set on shutdown; jobs poll it between series so stopping is prompt.
     stopping: threading.Event = field(default_factory=threading.Event)
 
@@ -140,7 +148,7 @@ def reap_orphaned_runs(session_factory: sessionmaker[Session]) -> int:
     with session_factory() as session:
         result = session.execute(
             update(JobRun)
-            .where(JobRun.status == 'running', JobRun.job_name.in_(LIVE_JOB_NAMES))
+            .where(JobRun.status == 'running', JobRun.job_name.in_(LIVE_JOB_NAMES + OPTIONS_JOB_NAMES))
             .values(
                 status='error',
                 finished_at=utc_now(),
@@ -298,7 +306,13 @@ def job_funding_predicted(session: Session, ctx: WorkerContext) -> JobOutcome:
 def job_feed_health(session: Session, ctx: WorkerContext) -> JobOutcome:
     """Recompute ``feed_health`` for every gating feed from what is actually stored."""
     outcome = JobOutcome()
-    statuses = health.refresh_feed_health(session, now=ctx.client.now(), attempts=ctx.attempts, settings=ctx.settings)
+    statuses = health.refresh_feed_health(
+        session,
+        now=ctx.client.now(),
+        attempts=ctx.attempts,
+        settings=ctx.settings,
+        include_options=ctx.deribit is not None,
+    )
     counts: dict[str, int] = {}
     for item in statuses:
         counts[item.status] = counts.get(item.status, 0) + 1
@@ -326,3 +340,48 @@ def job_intervals(settings: Settings) -> dict[str, int]:
         JOB_FEED_HEALTH: settings.feed_health_poll_seconds,
     }
 
+def job_deribit_book(session: Session, ctx: WorkerContext) -> JobOutcome:
+    """Fetch the Deribit public book for each watchlist coin Deribit lists, store it and its derived metrics.
+
+    One request per currency (BTC, ETH). A coin's failure (network, shape, DB) is recorded against that coin only;
+    the other coin's rows are kept (each coin is stored inside a SAVEPOINT). An alt has no Deribit book and is
+    not touched: the options check gives it ``ignore`` / ``no_options_book`` and the alert proceeds.
+    """
+    # Imported here: options_ingest pulls in the feature job, which the Binance-only worker never needs.
+    from app.worker.options_ingest import ingest_coin
+
+    outcome = JobOutcome()
+    client = ctx.deribit
+    if client is None:
+        outcome.skipped = True
+        return outcome
+    coins = [coin for coin in ctx.settings.watchlist_symbols if coin in C.OPTIONS_CURRENCY_BY_COIN]
+    stored = duplicates = 0
+    for coin in coins:
+        if ctx.stopping.is_set():
+            outcome.detail['interrupted'] = True
+            break
+        try:
+            result = ingest_coin(session, client, coin, write_calendar=ctx.settings.deribit_write_expiry_calendar)
+        except Exception as exc:
+            # A failure while storing was already rolled back to its SAVEPOINT; one while fetching wrote nothing.
+            outcome.errors.append(f'{health.FEED_DERIBIT_BOOK} {coin}: {_abort_message(exc)}')
+            ctx.attempts.error(health.FEED_DERIBIT_BOOK, coin, utc_now(), _abort_message(exc))
+            continue
+        ctx.attempts.success(health.FEED_DERIBIT_BOOK, coin, utc_now())
+        if result.inserted:
+            stored += 1
+            outcome.rows_touched += 1 + result.metrics_written + result.calendar_written
+        else:
+            duplicates += 1
+    outcome.detail.update(coins=len(coins), stored=stored, duplicates=duplicates)
+    return outcome
+
+
+#: Jobs that exist only with a Deribit client. Kept apart from ``JOBS`` so the five Binance jobs are unchanged.
+OPTIONS_JOBS: dict[str, JobFn] = {JOB_DERIBIT_BOOK: job_deribit_book}
+
+
+def options_job_intervals(settings: Settings) -> dict[str, int]:
+    """Seconds between runs of the optional Deribit job."""
+    return {JOB_DERIBIT_BOOK: settings.feed_deribit_poll_seconds}
