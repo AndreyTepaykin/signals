@@ -30,7 +30,7 @@ from types import MappingProxyType
 # ---------------------------------------------------------------------------
 # Rule version (hashed together with the constants below).
 # ---------------------------------------------------------------------------
-RULE_VERSION = 'phase1-v2'
+RULE_VERSION = 'phase1-v3'
 
 # ---------------------------------------------------------------------------
 # Horizons and vertical barriers
@@ -260,10 +260,96 @@ PERP_SPOT_MAX_DISAGREEMENT_ATR = 1.0  # strictly greater -> stand down
 # above). Deferred to M2 (feed_health); deliberately not invented here.
 
 # ---------------------------------------------------------------------------
+# Frozen rules (Milestone 4): direction, triggers, setup families, stand-downs
+# Spec: "Indicators that improve the signal", "Anti-noise", "Metrics that move
+# the estimate" (trend efficiency: "Only that family may fire").
+# Everything below is an interpretation the spec leaves open and is listed as a
+# numbered Ambiguity in the M4 BUILD-LOG entry; none of it is optimised.
+# ---------------------------------------------------------------------------
+TRIGGER_SWING_BREAK = 'swing_break'
+TRIGGER_PULLBACK_RESET = 'pullback_reset'
+TRIGGER_SQUEEZE = 'squeeze'
+TRIGGER_VWAP_TAG = 'vwap_tag'
+# When two triggers fire on one bar the first in this order is recorded (the
+# candidate has one `trigger`). Must hold exactly the `TRIGGERS` vocabulary.
+TRIGGER_PRIORITY = (TRIGGER_SWING_BREAK, TRIGGER_PULLBACK_RESET, TRIGGER_SQUEEZE, TRIGGER_VWAP_TAG)
+
+# "Only that family may fire": which triggers each efficiency family may use.
+# The break and the pullback are trend-following; the VWAP tag is the chop
+# mean-reversion entry ("In chop, stretched distance"); a squeeze may time a
+# break in either family.
+TRIGGERS_BY_FAMILY = MappingProxyType(
+    {
+        FAMILY_TREND: (TRIGGER_SWING_BREAK, TRIGGER_PULLBACK_RESET, TRIGGER_SQUEEZE),
+        FAMILY_CHOP: (TRIGGER_SQUEEZE, TRIGGER_VWAP_TAG),
+    }
+)
+
+# The swing-break TRIGGER fires on the EVENT (the 15m bar that closes the first
+# 4h close beyond the swing), never on the STATE. The state is only the
+# direction permission for every trigger. See the M4 BUILD-LOG entry.
+SWING_BREAK_TRIGGER_FIRES_ON = 'event'
+
+# Frozen setup-family vocabulary: the `setup_family` pool key (M8's last walk-up
+# level). One family per trigger; the efficiency family is a separate pool
+# dimension (`trend_family`), so a squeeze in a trend and in chop pool apart
+# until the walk-up merges them.
+SETUP_FAMILY_BREAKOUT = 'breakout'
+SETUP_FAMILY_PULLBACK = 'pullback'
+SETUP_FAMILY_SQUEEZE = 'squeeze'
+SETUP_FAMILY_REVERSION = 'reversion'
+SETUP_FAMILIES = (SETUP_FAMILY_BREAKOUT, SETUP_FAMILY_PULLBACK, SETUP_FAMILY_SQUEEZE, SETUP_FAMILY_REVERSION)
+SETUP_FAMILY_BY_TRIGGER = MappingProxyType(
+    {
+        TRIGGER_SWING_BREAK: SETUP_FAMILY_BREAKOUT,
+        TRIGGER_PULLBACK_RESET: SETUP_FAMILY_PULLBACK,
+        TRIGGER_SQUEEZE: SETUP_FAMILY_SQUEEZE,
+        TRIGGER_VWAP_TAG: SETUP_FAMILY_REVERSION,
+    }
+)
+
+# Direction vote ("Directional sources vote on Long / Short / Watch"). The 4h
+# swing break supplies the direction (it "allows the direction"); the
+# positioning sources then vote for it or against it. A source with a NULL
+# input abstains. The candidate is confirmed when (votes for - votes against)
+# >= DIRECTION_VOTE_MIN_NET; otherwise it is a `watch`.
+# |z| >= DIRECTION_VOTE_Z_MIN is a decisive reading of a z-scored source
+# (aggressor imbalance; funding and perp basis read as CROWDING, so contrarian).
+# 1.0 is the one z-score the spec freezes (the alt residual gate), reused here.
+DIRECTION_VOTE_Z_MIN = 1.0
+DIRECTION_VOTE_MIN_NET = 0
+
+# Chop mean-reversion entry: the signal-bar close is at least this many ATR from
+# the session VWAP, on the side opposite the trade direction. The spec says
+# "stretched distance" without a number.
+VWAP_STRETCH_ATR = 1.0
+
+# Stand-down inputs that can be unknown (NULL on the feature row). The event
+# calendar is owner-loaded and optional in Phase 1, so an unloaded calendar does
+# not stand the book down; a missing spot bar is a feed fault, so it does.
+STAND_DOWN_ON_UNKNOWN_EVENT_CALENDAR = False
+STAND_DOWN_ON_UNKNOWN_PERP_SPOT = True
+
+# Machine-readable `candidate.status_reason` codes written by the rules.
+STATUS_REASON_PENDING_OPTIONS_CHECK = 'pending_options_check'  # status `watch`: M4 passed, M5 has not run
+STATUS_REASON_VOTE_CONFLICT = 'vote_conflict'  # status `watch`
+STATUS_REASON_CVD_DIVERGENCE = 'cvd_divergence_against'  # status `cancelled`
+STATUS_REASON_STAND_DOWN_PREFIX = 'stand_down:'  # status `cancelled`, then the kinds below joined by `+`
+STAND_DOWN_FEED_BREACH = 'feed_stale'
+STAND_DOWN_EVENT_WINDOW = 'event_window'
+STAND_DOWN_PERP_SPOT = 'perp_spot_disagreement'
+
+# ---------------------------------------------------------------------------
 # Locked book and promotion gate
 # Spec: "Shadow mode and promotion".
 # ---------------------------------------------------------------------------
 LOCKED_BOOK_ONE_IN = 5  # hash(coin, bar_time) % 5 selects the locked book
+# The bucket is the first LOCKED_BOOK_HASH_BYTES bytes of HASH_ALGORITHM over the
+# canonical text of {"bar_close", "coin"}, read as a big-endian integer, mod
+# LOCKED_BOOK_ONE_IN. A candidate is in the locked book when that equals
+# LOCKED_BOOK_SELECTED_BUCKET.
+LOCKED_BOOK_HASH_BYTES = 8
+LOCKED_BOOK_SELECTED_BUCKET = 0
 PROMOTION_MIN_SHADOW_WEEKS = 4
 PROMOTION_MIN_PAIRED_OUTCOMES = 50
 PROMOTION_INTERVAL_CONFIDENCE = INTERVAL_CONFIDENCE

@@ -40,6 +40,7 @@ TREND_FAMILIES = C.FAMILIES  # trend | chop
 OPTIONS_VERDICTS = C.OPTIONS_VERDICT_PRECEDENCE  # ignore | expiry_pin | headwind | amplify | dampen | align
 OPTIONS_VOL_TAGS = C.OPTIONS_VOL_TAGS  # vol_rich | vol_cheap
 OPTIONS_EXPRESSIONS = C.OPTIONS_EXPRESSIONS  # perp | spot | defined_risk_option | wait_for_expiry
+SETUP_FAMILIES = C.SETUP_FAMILIES  # breakout | pullback | squeeze | reversion (frozen by M4)
 POOL_LEVELS = tuple(level for level, _dims in C.POOL_WALK_UP_LEVELS)
 #: Sessions as stored in the regime slice. ``late`` folds into ``asia`` (or
 #: stays ``us`` while US cash is open), so it is never a stored slice value -

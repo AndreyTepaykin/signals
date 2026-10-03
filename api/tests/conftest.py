@@ -132,7 +132,7 @@ def make_candidate(session: Session, **overrides: Any) -> Candidate:
         'direction': E.DIRECTION_LONG,
         'source': source,
         'trigger': E.TRIGGERS[0],
-        'setup_family': 'swing_break_trend',
+        'setup_family': 'breakout',
         'trend_family': E.TREND_FAMILIES[0],
         'feature_hash': feature_row.feature_hash,
         'rule_hash': 'r' * 64,

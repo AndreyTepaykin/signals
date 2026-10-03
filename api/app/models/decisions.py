@@ -140,7 +140,7 @@ class Candidate(SurrogateKey, CreatedAt, Base):
     trigger: Mapped[str] = mapped_column(nullable=False, comment='swing_break | squeeze | vwap_tag | pullback_reset')
     setup_family: Mapped[str] = mapped_column(
         nullable=False,
-        comment='Pool key dimension. Open vocabulary: M4 owns and must freeze it.',
+        comment='Pool key dimension. Closed vocabulary frozen by M4: breakout | pullback | squeeze | reversion.',
     )
     trend_family: Mapped[str] = mapped_column(nullable=False, comment='trend | chop, the family that was allowed to fire.')
 
@@ -301,6 +301,7 @@ class Candidate(SurrogateKey, CreatedAt, Base):
         E.one_of('direction', E.DIRECTIONS),
         E.one_of('source', E.SOURCES),
         E.one_of('trigger', E.TRIGGERS),
+        E.one_of('setup_family', E.SETUP_FAMILIES),
         E.one_of('trend_family', E.TREND_FAMILIES),
         E.one_of('status', E.CANDIDATE_STATUSES),
         E.one_of('sample_group_reason', E.SAMPLE_GROUP_REASONS),

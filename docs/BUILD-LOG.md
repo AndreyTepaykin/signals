@@ -634,3 +634,57 @@ sha256(canonical_serialize({
 - `cd repo/api; & '.\.venv\Scripts\python.exe' -m pytest -q` -> **`800 passed in 153.22s`** (780 before + 20 new; no skips).
 - `python -m alembic upgrade head` -> `7cd7d7f2e800 -> 1c329301cc23`; `downgrade -1` and `upgrade head` again round-trip cleanly; `alembic current` = `1c329301cc23 (head)`. `test_migration_matches_models` (compare_metadata against `public`) finds an empty diff.
 - Real data, `python -m app.worker.feature_job --coins BTCUSDT --at 2026-10-02T18:15:00Z --source replay --dry-run`: `swing_break_direction` long, `swing_break_state` TRUE, `swing_break_event` FALSE (the break M3 noted is about a day old), chandelier 84,254.80, distance 0.602343 ATR. These match M3's numbers.
+
+## M4 - Frozen rules (candidate creation)
+
+- Date: 2026-10-03
+- Model: Claude Sonnet 5.5 high (implementer), Claude Opus 5.5 (orchestrator review)
+
+Turns a `feature_row`, read through the `as_of` gate, into `candidate` rows: direction vote, efficiency gate, triggers, anti-noise and stand-down, chandelier stop as 1R, 1-in-5 locked book, sample groups. Freezes the setup-family vocabulary.
+
+### Files created or modified
+- `repo/api/app/core/rules/` (new, pure): `inputs.py` (`RuleInputs`), `direction.py` (vote), `triggers.py`, `stops.py` (chandelier as 1R), `locked_book.py`, `sample_group.py`, `evaluate.py` (gate -> family -> trigger -> anti-noise -> proposal).
+- `repo/api/app/worker/rules_job.py` (new) - DB glue and CLI.
+- `repo/api/alembic/versions/20261003_1900_a41f7c05d2e9_setup_family_check.py` - CHECK `ck_candidate_setup_family`.
+- `repo/api/app/core/constants.py` - `RULE_VERSION = 'phase1-v3'` and the M4 constants block (below).
+- `repo/api/app/models/enums.py` (`SETUP_FAMILIES`), `repo/api/app/models/decisions.py` (the CHECK on the model).
+- Tests: `test_rules_evaluate.py`, `test_rules_locked_book.py`, `test_rules_sample_group.py`, `test_rules_constants.py`, `test_rules_job.py`, helper `rules_helpers.py`; `conftest.py` default `setup_family='breakout'`; `test_hashing.py` v3 pin.
+
+### Contracts frozen
+- `RuleInputs.from_feature_row(row, *, reference_coin)` (`app.core.rules.inputs`).
+- `tally(direction, inputs) -> VoteTally` (`direction`); `fired_triggers(inputs, side)` (`triggers`); `stop_plan(inputs, side) -> StopPlan | None` (`stops`).
+- `locked_book_bucket(coin, bar_close)`, `is_locked_book(coin, bar_close)` (`locked_book`).
+- `assign_sample_group(*, coin, horizon, source, bar_close, direction, priors, reference_coin) -> GroupAssignment`, `has_open_signal(priors, coin, horizon, bar_close)`, `new_group_id(coin, horizon, bar_close, source)`, `occupies_slot(prior)` (`sample_group`).
+- `evaluate(inputs, context=None) -> Evaluation(proposal, skipped)`; `RuleContext(has_open_signal=False, feed_breaches=())` (`evaluate`).
+- `app.worker.rules_job`: `run_rules_for_bar`, `run_rules_job`, `run_feature_and_rules_job`, `decide`, `candidate_values`, `load_priors`, `live_feed_breaches`, `order_coins`, CLI `main`. No wall-clock reads: `decision_time` = now for live, `bar_close` for replay; `source` set to match. Replay passes no feed breaches. The reference coin (BTC) runs first on every bar.
+- **Setup-family vocabulary (frozen, CHECK):** `breakout`, `pullback`, `squeeze`, `reversion`, 1:1 from the trigger (`SETUP_FAMILY_BY_TRIGGER`): `swing_break`->`breakout`, `pullback_reset`->`pullback`, `squeeze`->`squeeze`, `vwap_tag`->`reversion`. The efficiency family stays a separate pool dimension (`trend_family`).
+- **Family gate (`TRIGGERS_BY_FAMILY`):** trend may fire `swing_break`, `pullback_reset`, `squeeze`; chop may fire `squeeze`, `vwap_tag`. One trigger is recorded per candidate, by `TRIGGER_PRIORITY` = `swing_break > pullback_reset > squeeze > vwap_tag`.
+- **Swing break:** the trigger fires on `swing_break_event` (`SWING_BREAK_TRIGGER_FIRES_ON='event'`). `swing_break_state` is only the direction permission for every trigger. Firing on the state would re-trigger on every 15m bar of a move that has already happened.
+- **Direction vote:** the 4h break supplies the direction. Aggressor imbalance votes with its sign; funding and perp basis vote contrarian (crowding). A source votes when `|z| >= DIRECTION_VOTE_Z_MIN = 1.0`; NULL abstains. Confirmed when `votes_for - votes_against >= DIRECTION_VOTE_MIN_NET = 0`, so the break direction stands unless the opposing votes outnumber the confirming ones (owner-confirmed at review). Otherwise status `watch`, reason `vote_conflict`.
+- **Stand-down / anti-noise:** feed breach (`stand_down_breaches`, live only), event window, perp/spot disagreement -> `cancelled`, reason `stand_down:<kinds joined by +>`. CVD divergence against -> `cancelled`, reason `cvd_divergence_against`. Unknown event calendar does NOT stand down; unknown perp/spot DOES. An open signal on the same coin and horizon, or a failed alt residual gate, writes no row.
+- **Prices:** candidates are written `watch` + `pending_options_check` (so no `alert` has a NULL `options_verdict`). M4 sets `pre_options_stop_price` and `pre_options_target_price`, and `stop_price` (NOT NULL) holds the pre-options stop as a placeholder that M5 overwrites. `entry_price`, `one_r`, barrier prices and `vertical_deadline` stay NULL.
+- **Locked book:** `sha256` of the canonical text of `{"bar_close", "coin"}` (`candidate.bar_close`), first `LOCKED_BOOK_HASH_BYTES = 8` bytes big-endian, `% LOCKED_BOOK_ONE_IN == LOCKED_BOOK_SELECTED_BUCKET (0)`. Measured rate 0.19986 over 5 coins x 60 days.
+- **Sample groups (assigned at creation, never rewritten):** `overlap` = inherit the own coin's earlier candidate whose frozen hold (`bar_close` .. `bar_close + horizon`) is still open; `btc_impulse` = an alt inherits a same-direction reference-coin candidate on this bar or earlier with an open hold; otherwise `new` with a deterministic `uuid5` id and no leader.
+- **`rule_hash()` at `phase1-v3` = `eb32a9d4140c5c55691d74d8c278adcb83860e3d68cf42d07ad8b3a7a3923dff`.** No candidate or label rows existed, so nothing carries the v2 hash. No engine params added. Alembic head `a41f7c05d2e9`.
+
+### Deferred to a later milestone
+- Headwind cancel and every options field; how M5/M6 treat cancelled shadow rows with NULL options -> M5/M6.
+- Abstain -> M8. Max alerts per day and the minimum-P preference -> M8/M10.
+- Scheduler wiring of `run_feature_and_rules_job` into the live worker; a max decision lag -> M10.
+- Loading the event calendar (until then it is always unknown, which does not stand down).
+
+### Ambiguities (choices made)
+1. `swing_break` fires on the event; the state is the permission (above).
+2. Family vocabulary and 1:1 trigger mapping (above); trend/chop trigger split (above).
+3. The vote reuses the one z-score the spec freezes (1.0, the alt residual gate) and `MIN_NET = 0`.
+4. `VWAP_STRETCH_ATR = 1.0` ("stretched distance" has no number in the spec): the chop VWAP tag needs the close at least 1 ATR from session VWAP, on the side opposite the trade.
+5. No separate trend VWAP-hold trigger; `pullback_reset` already covers it. Its sign is read against the 4h break direction.
+6. Slot occupancy and cooldown both equal the frozen hold window; no separate cooldown number.
+7. Stand-down, CVD and vote-conflict rows are written as shadow rows; the alt gate and an open signal write nothing.
+8. Replay has no feed-health history, so it passes no breaches.
+9. `uuid5` group ids so replay is deterministic. Overlap only sees candidates that already exist, so a BTC candidate written later on the same bar cannot group an earlier alt; BTC-first ordering prevents that.
+10. Hold windows compare against the new `bar_close`, not `decision_time`; a same-bar candidate counts only for `btc_impulse` from the reference coin.
+
+### Verification
+- `cd repo/api; & '.\.venv\Scripts\python.exe' -m pytest -q` -> **`951 passed in 186.56s`** (800 before + 151 new), rerun by the orchestrator.
+- `alembic current` = `a41f7c05d2e9 (head)`; the implementer round-tripped downgrade/upgrade.
