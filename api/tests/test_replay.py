@@ -8,8 +8,10 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy import delete, func, insert, select, text, update
 from sqlalchemy.orm import sessionmaker
+
+from app.models.base import Base
 
 from app.core import constants as C
 from app.core.features import columns
@@ -22,7 +24,6 @@ from app.models.labels import Label
 from app.worker import feature_job as FJ
 from app.worker import label_job as LJ
 from app.worker import options_job as OJ
-from app.core.db_sync import get_sync_session_factory
 from app.core.features.assemble import compute_features
 from app.worker import replay as RP
 from app.worker import replay_feeds as RF
@@ -534,13 +535,36 @@ def test_assemble_with_preloaded_matches_db_path(session):
     assert len(rows) == len(C.HORIZONS)
 
 
-def test_replay_workers_two_match_workers_one_feature_hashes(session):
-    store_market(session, synthetic_inputs(days=4, end=BAR_CLOSE))
-    session.commit()
+@pytest.fixture
+def schema_factory(db_engine, db_schema):
+    """Committing sessions on the throwaway test schema (never ``public``); every table is emptied afterwards.
+
+    The ``session`` fixture's rolled-back transaction is invisible to pool workers, so this test must commit.
+    """
+    factory = RP.schema_session_factory(db_schema)
+    try:
+        yield factory
+    finally:
+        tables = ', '.join(f'"{db_schema}"."{t.name}"' for t in Base.metadata.sorted_tables)
+        with db_engine.begin() as connection:
+            connection.execute(text(f'TRUNCATE {tables} CASCADE'))
+
+
+def test_schema_factory_never_points_at_public(schema_factory, db_schema):
+    with schema_factory() as s:
+        assert s.execute(text('SELECT current_schema()')).scalar_one() == db_schema
+        s.commit()
+        assert s.execute(text('SELECT current_schema()')).scalar_one() == db_schema
+
+
+def test_replay_workers_two_match_workers_one_feature_hashes(schema_factory, db_schema):
+    with schema_factory() as s:
+        store_market(s, synthetic_inputs(days=4, end=BAR_CLOSE))
+        s.commit()
     start = BAR_CLOSE - 2 * M15
     end = BAR_CLOSE
     label_at = end + timedelta(days=1)
-    factory = get_sync_session_factory()
+    factory = schema_factory
     code = 'wkrtest1'
     RP.run_replay(
         factory,
@@ -571,6 +595,7 @@ def test_replay_workers_two_match_workers_one_feature_hashes(session):
         workers=2,
         history_policy=POLICY,
         code_version=code,
+        search_path=db_schema,
     )
     with factory() as s:
         rows_two = s.execute(
@@ -578,6 +603,7 @@ def test_replay_workers_two_match_workers_one_feature_hashes(session):
                 FeatureRow.source == E.SOURCE_REPLAY, FeatureRow.code_version == code
             )
         ).all()
+    assert rows_one
     assert sorted(rows_one) == sorted(rows_two)
 
 

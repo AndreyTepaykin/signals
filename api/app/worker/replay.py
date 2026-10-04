@@ -53,11 +53,15 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
+
+from sqlalchemy import event
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from app.config import get_settings, parse_symbols
 from app.core import constants as C
-from app.core.db_sync import get_sync_session_factory
+from app.core.db_sync import create_utc_engine, get_sync_database_url, get_sync_session_factory
 from app.core.features import params as P
 from app.core.features.params import HistoryPolicy, PRODUCTION_POLICY
 from app.core.features.params import timeframe_delta
@@ -361,12 +365,30 @@ def _phase_a_features_for_coin(
     return totals
 
 
-def _replay_features_worker(payload: tuple[str, tuple[str, ...], str, tuple[int, float, int]]) -> _CoinFeatureTotals:
-    """Process-pool entry: one coin, all bar closes (ISO strings), code version, history policy."""
-    coin, bars_iso, version, policy_fields = payload
+def schema_session_factory(search_path: str) -> sessionmaker[Session]:
+    """Sessions on the configured database whose every connection uses ``search_path`` (survives commits)."""
+    engine = create_utc_engine(get_sync_database_url(), poolclass=NullPool, future=True)
+
+    @event.listens_for(engine, 'connect')
+    def _pin_schema(dbapi_connection: Any, _record: Any) -> None:
+        with dbapi_connection.cursor() as cursor:
+            cursor.execute(f'SET search_path TO "{search_path}"')
+        dbapi_connection.commit()
+
+    return sessionmaker(bind=engine, expire_on_commit=False)
+
+
+def _replay_features_worker(payload: tuple[Any, ...]) -> _CoinFeatureTotals:
+    """Process-pool entry: one coin, all bar closes (ISO strings), code version, history policy, search_path.
+
+    A spawned process cannot inherit the caller's session factory, so it opens the configured database and, when
+    ``search_path`` is set, pins that schema (tests use a throwaway schema; production passes None).
+    """
+    coin, bars_iso, version, policy_fields = payload[:4]
+    search_path = payload[4] if len(payload) > 4 else None
     bars = [ensure_utc(datetime.fromisoformat(t)) for t in bars_iso]
     policy = HistoryPolicy(*policy_fields)
-    factory = get_sync_session_factory()
+    factory = get_sync_session_factory() if search_path is None else schema_session_factory(search_path)
     with factory() as session:
         return _phase_a_features_for_coin(
             session,
@@ -390,14 +412,15 @@ def _parallel_phase_a(
     version: str,
     policy: HistoryPolicy,
     workers: int,
+    factory: Callable[[], Session],
+    search_path: str | None,
 ) -> None:
     if not bars or not coin_list:
         return
     bars_iso = tuple(b.isoformat() for b in bars)
     pf = _policy_fields(policy)
-    payloads = [(coin, bars_iso, version, pf) for coin in coin_list]
+    payloads = [(coin, bars_iso, version, pf, search_path) for coin in coin_list]
     if workers <= 1:
-        factory = get_sync_session_factory()
         with factory() as session:
             for coin in coin_list:
                 totals = _phase_a_features_for_coin(session, coin, bars, version=version, policy=policy, commit=True)
@@ -474,11 +497,14 @@ def run_replay(
     code_version: str | None = None,
     history_policy: HistoryPolicy | None = None,
     workers: int | None = None,
+    search_path: str | None = None,
 ) -> ReplayReport:
     """Walk ``start``..``end`` and run features, rules, options, then label at ``label_at``.
 
     Real runs use phased features (optional process pool), then rules/options per bar, then labels.
     ``dry_run`` uses one transaction and rolls back at the end (single process, preloaded feeds).
+    Every session comes from ``session_or_factory`` except the pool workers', which open the configured
+    database; ``search_path`` must then name the schema the factory's sessions use (None = the default).
     """
     start, end, label, coin_list = validate_replay_args(start=start, end=end, label_at=label_at, coins=coins)
     bars = iter_bar_closes(start, end)
@@ -537,6 +563,8 @@ def run_replay(
             version=version,
             policy=policy,
             workers=worker_count,
+            factory=session_or_factory,
+            search_path=search_path,
         )
         _phase_b_rules_options(
             session_or_factory,
