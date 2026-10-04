@@ -99,7 +99,10 @@ TRIGGERS = ('swing_break', 'squeeze', 'vwap_tag', 'pullback_reset')
 BARRIER_UPPER = 'upper'
 BARRIER_LOWER = 'lower'
 BARRIER_VERTICAL = 'vertical'
-FIRST_BARRIERS = (BARRIER_UPPER, BARRIER_LOWER, BARRIER_VERTICAL)
+#: Not a barrier: the next open was at or through the stop (or through the cap), so the setup was invalid before the
+#: fill and there is no entry and no realized R. M8 excludes these from expectancy and reports their rate apart.
+BARRIER_NO_ENTRY = 'no_entry'
+FIRST_BARRIERS = (BARRIER_UPPER, BARRIER_LOWER, BARRIER_VERTICAL, BARRIER_NO_ENTRY)
 
 #: Four OI-price states plus the dead zone. Spec: "Four states, plus the
 #: OI-change z-score. A dead zone ignores OI changes inside 0.25 sigma" - a

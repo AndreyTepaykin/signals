@@ -208,8 +208,8 @@ def test_a_fractional_second_funding_age_is_refused(monkeypatch):
         H.frozen_engine_params()
 
 
-def test_rule_version_is_phase1_v4():
-    assert C.RULE_VERSION == 'phase1-v4'
+def test_rule_version_is_phase1_v5():
+    assert C.RULE_VERSION == 'phase1-v5'
 
 
 # --- code_version ---------------------------------------------------------

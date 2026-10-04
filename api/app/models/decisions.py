@@ -79,7 +79,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, ForeignKeyConstraint, Index, UniqueConstraint
+from sqlalchemy import DDL, BigInteger, CheckConstraint, ForeignKey, ForeignKeyConstraint, Index, UniqueConstraint, event
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core import constants as C
@@ -347,6 +347,15 @@ class Candidate(SurrogateKey, CreatedAt, Base):
             'lower_barrier_price IS NULL OR lower_barrier_price = stop_price',
             name='lower_barrier_is_the_stop',
         ),
+        # Milestone 6 writes the fill-time values in one statement, so a row never holds some of them. An entry price
+        # comes with the deadline and with either all of 1R and both barriers, or none of them (a `no_entry` fill:
+        # the open was at or through the stop or the cap, so the observed open is recorded and nothing else).
+        CheckConstraint(
+            'entry_price IS NULL OR (vertical_deadline IS NOT NULL AND ('
+            '(one_r IS NOT NULL AND upper_barrier_price IS NOT NULL AND lower_barrier_price IS NOT NULL)'
+            ' OR (one_r IS NULL AND upper_barrier_price IS NULL AND lower_barrier_price IS NULL)))',
+            name='fill_values_written_together',
+        ),
         # The upper barrier is +1R in R space, which for a short is a lower
         # price. This is the guard against storing it the wrong way round.
         CheckConstraint(
@@ -376,4 +385,31 @@ class Candidate(SurrogateKey, CreatedAt, Base):
     )
 
 
-__all__ = ['Candidate']
+#: The fill-time values are written once, in one statement (NULL -> value). Once the entry price is set, none of the five
+#: may change again, including a `no_entry` row's NULL 1R and barriers; nothing can clear the deadline either. It fails
+#: inside the database, whoever the caller is. The migration carries a copy of this SQL.
+FREEZE_FUNCTION_SQL = """
+CREATE OR REPLACE FUNCTION candidate_freeze_fill_values() RETURNS trigger AS $$
+BEGIN
+    IF (OLD.vertical_deadline IS NOT NULL AND NEW.vertical_deadline IS DISTINCT FROM OLD.vertical_deadline)
+        OR (OLD.entry_price IS NOT NULL AND (
+            NEW.entry_price IS DISTINCT FROM OLD.entry_price
+            OR NEW.one_r IS DISTINCT FROM OLD.one_r
+            OR NEW.upper_barrier_price IS DISTINCT FROM OLD.upper_barrier_price
+            OR NEW.lower_barrier_price IS DISTINCT FROM OLD.lower_barrier_price))
+    THEN
+        RAISE EXCEPTION USING MESSAGE = 'candidate fill values are write-once, id ' || OLD.id, ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql
+"""
+FREEZE_TRIGGER_SQL = (
+    'CREATE TRIGGER candidate_freeze_fill_values BEFORE UPDATE ON candidate '
+    'FOR EACH ROW EXECUTE FUNCTION candidate_freeze_fill_values()'
+)
+event.listen(Candidate.__table__, 'after_create', DDL(FREEZE_FUNCTION_SQL).execute_if(dialect='postgresql'))
+event.listen(Candidate.__table__, 'after_create', DDL(FREEZE_TRIGGER_SQL).execute_if(dialect='postgresql'))
+
+
+__all__ = ['FREEZE_FUNCTION_SQL', 'FREEZE_TRIGGER_SQL', 'Candidate']

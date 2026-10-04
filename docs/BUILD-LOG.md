@@ -740,3 +740,56 @@ Deribit public book-summary ingest (BTC, ETH), pure options metrics, a pure opti
 - `alembic current` = `c52e9b8a4f17 (head)`; implementer ran upgrade, `downgrade -1`, upgrade.
 - Bugbot over the uncommitted diff: no findings.
 
+
+## M6 - Barrier labeler
+
+- Date: 2026-10-04
+- Model: Claude Sonnet 5.5 high (implementer); Bugbot review on the final diff found no bugs
+- Revised the same day for the owner decisions (no-entry labels, hashed semantics, funding stall cap).
+
+Freezes `entry_price`, `one_r`, both barrier prices and `vertical_deadline` once per candidate from the next bar's open, then labels the first barrier hit over `as_of`-gated 15m perp bars. Every status and both sources are labeled, provided the candidate carries the current `rule_hash`.
+
+### Files created or modified
+- `repo/api/app/core/labeler/barriers.py` (new, pure) - `plan_barriers`, `resolve`, `fees_r`, `funding_window_complete`, `funding_stalled`, `realized_funding`, `stored_r`, `check_conventions`, dataclasses.
+- `repo/api/app/worker/label_job.py` (new) - DB glue and CLI.
+- `repo/api/app/core/constants.py` - `RULE_VERSION = 'phase1-v5'` and the hashed `LABEL_*` block (below).
+- `repo/api/app/models/enums.py` - `BARRIER_NO_ENTRY = 'no_entry'` added to `FIRST_BARRIERS`.
+- `repo/api/app/models/labels.py` - `feature_hash`, `rule_hash` (NOT NULL), `code_version` NOT NULL, `funding_partial` (bool NOT NULL, default false); R columns and `hours_to_resolution` nullable; CHECKs `no_entry_has_no_r` and `filled_label_has_r`.
+- `repo/api/app/models/decisions.py` - CHECK `ck_candidate_fill_values_written_together`; write-once trigger SQL (`FREEZE_FUNCTION_SQL`, `FREEZE_TRIGGER_SQL`) attached to table creation.
+- `repo/api/alembic/versions/20261004_1630_d8b2f6a31e05_barrier_labeler.py` - all of the above; existing label rows (none) would take their candidate's hashes. Edited in place (still uncommitted) and re-applied by downgrade/upgrade.
+- Tests: `test_labeler_barriers.py` (70), `test_label_job.py` (78 cases), `test_label_rule_hash.py` (20, new); pins moved in `test_rules_constants.py` / `test_hashing.py`; `test_schema_constraints.py::a_label` gains the provenance columns.
+- `rule_hash` **moved**: `phase1-v4` / `c13d04dd...` -> `phase1-v5` / `dd943a83c5966117ea8d58089f4c378a1ec2506239c91c108938276d4b31ba8c`.
+
+### Contracts frozen
+- `app.worker.label_job`: `run_label_job(session, as_of_time, *, source=None, coins=None, dry_run=False, code_version=None, funding_max_gap=None, rule_hash=None) -> LabelReport`, `label_candidate(...)`, `pending_candidates`, `count_stale_rule_hash`, `freeze_fill`, `summarize`, `run_live_label_job(session, *, now=None)`. CLI `python -m app.worker.label_job [--source] [--coins] [--at ISO] [--dry-run]`. Results `labeled | no_entry | pending | already_labeled | dry_run | error`; pending details `entry_bar_not_visible | awaiting_bars | missing_bar | funding_incomplete`. The run summary is `as_of_time, rule_hash, labeled, no_entry, funding_partial, pending, stale_rule_hash, errors`. No wall clock: `as_of_time` is the caller's instant. Not scheduled (same as M4/M5; M10).
+- **Hashed semantics.** Every labeler convention is an UPPERCASE `constants.py` value, so it is in `rule_hash`: `LABEL_AMBIGUOUS_BAR_RESOLVES_TO='stop'`, `LABEL_GAP_STOP_FILLS_AT='open'`, `LABEL_GAP_TARGET_FILLS_AT='barrier'`, `LABEL_FEES_CHARGED_ON='entry_price'`, `LABEL_VERTICAL_EXIT='deadline_bar_close'`, `LABEL_RESOLVED_AT='bar_close'`, `LABEL_NO_ENTRY_RULE='open_at_or_through_stop_or_through_cap'`, `LABEL_FUNDING_WINDOW='after_fill_before_exit'`, `LABEL_FUNDING_NOTIONAL='mark_price_else_entry'`, `LABEL_FUNDING_MAX_INTERVAL_HOURS=8`, `LABEL_FUNDING_GAP_SLACK_MINUTES=5`, `LABEL_FUNDING_STALL_CAP_HOURS=24`. Fee bps was already hashed (`ROUND_TRIP_COST_BPS`, 12). `barriers.check_conventions()` runs at import and refuses a value the code does not implement. `test_label_rule_hash.py` pins the values, shows each one moves the hash, and AST-scans the labeler modules so a new numeric/Decimal/timedelta param that is neither derived from `C`/`P` nor on a short allowlist (storage quanta, unit conversions, sign table, `MISSING_BAR_AFTER`) fails.
+- **Rule-hash gate.** The job labels only candidates whose `rule_hash` equals the current `rule_hash`. Others are skipped, counted as `stale_rule_hash` (unlabeled, entry bar visible, options-checked) and never touched.
+- **Labelable** = `options_verdict IS NOT NULL`, no label row, current `rule_hash`. All five statuses (`alert`, `watch` incl. BTC/ETH `ignore` rows, `cancelled`, `delayed`, `abstained`), live and replay. A row still marked `pending_options_check` is untouched. `delayed` is labeled from its original fill.
+- **Fill**: fill_time = `candidate.bar_close`; entry = open of the perp 15m bar opening then, read through `as_of`. `one_r = |entry - stop_price|`; `lower = stop_price`; `upper = entry +/- one_r`, or `target_cap_price` if strictly nearer; `vertical_deadline = fill_time + horizon`. One guarded UPDATE `WHERE entry_price IS NULL` writes them, and the trigger `candidate_freeze_fill_values` makes any later change or clear of a non-NULL value raise `check_violation`. Re-runs read the stored values and never recompute. The CHECK says an entry price implies the deadline and either all of `one_r`/upper/lower or none of them.
+- **No entry** (decision 1): when the next open is at or through the stop, or through `target_cap_price`, the candidate freezes the observed open as `entry_price` and the deadline, with `one_r` and both barriers NULL (write-once like any fill). The label is written at once with `first_barrier='no_entry'`, `fill_time = resolved_at = bar_close`, `fill_price` = the observed open, hashes and `cost_assumption_bps` present, and **every R value NULL** (`price_r`, `fees_r`, `funding_r`, `stored_r`, `mae_r`, `mfe_r`, `hours_to_*`, `realized_funding_bps`; not 0, not -1); the CHECKs make `barrier_ambiguous`, `gapped_stop` and `funding_partial` false. It needs neither later bars nor funding. **M8 requirement:** exclude `no_entry` labels from expectancy and every R statistic, and report their count and rate separately (overall and per status/horizon).
+- **Resolution** over contiguous visible perp 15m bars from the fill, up to the deadline: stop touched = low <= lower (long) / high >= lower (short); target mirrored. Hit -> exit at the barrier, `resolved_at` = that bar's close time. A bar after the entry bar that opens beyond the stop exits at the open (`gapped_stop`, R below -1). A bar that opens beyond the target exits at the target. The entry bar can hit a barrier.
+- **Same-bar ambiguity** (decision 2): stop first, `barrier_ambiguous = true`. **M8 requirement:** report the ambiguous share of filled labels (excluding `no_entry`); if it exceeds 5%, revisit using on-demand Binance 1m klines for the ambiguous bars only (no standing 1m ingest).
+- **Timeout**: `first_barrier = 'vertical'`, exit at the close of the bar ending at the deadline, `price_r` is what that close is worth. "Miss" (stored R <= 0) is left to M8.
+- **Costs**: `fees_r = entry * ROUND_TRIP_COST_BPS / 1e4 / one_r` (12 bps, on the entry price for every filled outcome); `cost_assumption_bps`, `taker_fee_bps_per_side`, `slippage_bps_per_side` recorded. `stored_r = price_r - fees_r + funding_r`, each part quantized to 6 dp first.
+- **Funding**: settled prints with `fill_time < funding_time < resolved_at`, signed (long pays a positive rate), notional = print mark price or entry. The label waits (`funding_incomplete`) unless the visible prints show a print at or before the fill, no hole above 8h + 5 min, and a print within that of the exit. **Stall cap** (decision 4): if still `funding_incomplete` 24h after the exit bar became visible (`available_at`), the label is written with the funding seen so far and `funding_partial = true`. Write-once like any label; a late print never rewrites it. M8 should report the `funding_partial` share and may drop them from funding-sensitive stats.
+- **MAE/MFE**: R over bars up to the resolving bar; a stop-out bar adds only its adverse side (gapped: the open's loss). `mfe_r` 0 -> `hours_to_mfe` NULL.
+- Label also copies the regime slice from the decision-time `feature_row`, and `feature_hash`/`rule_hash` from the candidate; `code_version` is the resolver's.
+
+### Deferred to a later milestone
+- Label-only columns `cmi_*`, `expiry_during_hold`, `lead_venue*`, `spread_bps`, `hours_since_last_signal`, `book_overlap`, side-exit scores stay NULL in M6. M8 fills them in a separate enrichment step that may set NULL -> value exactly once per column (the same write-once pattern as the candidate fill; a non-NULL value is never changed). No M6 code for it.
+- Scheduling `run_live_label_job` -> M10.
+
+### Deviations from the plan
+- None open. (The first M6 pass left the semantic choices unhashed and recommended hashing them; that is now done.)
+
+### Ambiguities (accepted by the owner)
+1. `hours_to_resolution` is an upper bound at 15m granularity (`resolved_at` is the bar close).
+2. The live fill is frozen about 15 minutes after the signal (the 15m bar is visible only once it closes), not at the open.
+3. Funding is the strict interior of the hold; a print exactly at the exit or the fill is not charged. A feed hole holds the label pending until the 24h stall cap, then it is written `funding_partial`.
+4. The 8h hole tolerance is a hashed constant (Binance USDT-M default). A symbol on a shorter settlement interval is simply held to the looser bound; a longer one would stall into `funding_partial`.
+5. Entry bar is the perp 15m bar.
+
+### Verification
+- `cd repo/api; & '.\.venv\Scripts\python.exe' -m pytest -q` -> **`1326 passed in 210.49s (0:03:30)`** (1271 before; +55).
+- Migration `d8b2f6a31e05` re-applied after the in-place edit: stamped back to `c52e9b8a4f17`, `upgrade head`, `downgrade -1`, `upgrade head`; `alembic current` = `d8b2f6a31e05 (head)`.
+- `python -m app.worker.label_job --dry-run` against `signals`: `labeled=0 no_entry=0 funding_partial=0 pending=0 stale_rule_hash=0 errors=0` (no candidates exist yet).

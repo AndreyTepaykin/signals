@@ -30,7 +30,7 @@ from types import MappingProxyType
 # ---------------------------------------------------------------------------
 # Rule version (hashed together with the constants below).
 # ---------------------------------------------------------------------------
-RULE_VERSION = 'phase1-v4'
+RULE_VERSION = 'phase1-v5'
 
 # ---------------------------------------------------------------------------
 # Horizons and vertical barriers
@@ -61,6 +61,40 @@ TAKER_FEE_BPS_PER_SIDE = Decimal('4')
 SLIPPAGE_BPS_PER_SIDE = Decimal('2')
 SIDES_PER_ROUND_TRIP = 2
 ROUND_TRIP_COST_BPS = (TAKER_FEE_BPS_PER_SIDE + SLIPPAGE_BPS_PER_SIDE) * SIDES_PER_ROUND_TRIP  # 12 bps, fees+slippage only
+
+# ---------------------------------------------------------------------------
+# Barrier labeler (Milestone 6): conventions the spec leaves open.
+# Each is a numbered Ambiguity in the M6 BUILD-LOG entry. The labeler refuses to
+# import if one is set to a convention it does not implement, so a value here
+# cannot drift away from the code unnoticed. All of them enter rule_hash.
+# ---------------------------------------------------------------------------
+# A bar that touches both barriers cannot be ordered at 15m: it resolves to this one.
+LABEL_AMBIGUOUS_BAR_RESOLVES_TO = 'stop'  # 'stop' | 'target'
+# A bar after the entry bar that OPENS beyond the stop: "a stop that gaps fills at the
+# worse of the stop and the open" -> the open. A bar that opens beyond the target is
+# a limit order: it fills at the barrier, not at the better open.
+LABEL_GAP_STOP_FILLS_AT = 'open'  # 'open' | 'stop'
+LABEL_GAP_TARGET_FILLS_AT = 'barrier'  # 'barrier' | 'open'
+# Fees and slippage (TAKER_FEE_BPS_PER_SIDE + SLIPPAGE_BPS_PER_SIDE, both sides) are charged on the entry price.
+LABEL_FEES_CHARGED_ON = 'entry_price'
+# No barrier by the deadline: exit at the close of the bar that ends at the deadline.
+LABEL_VERTICAL_EXIT = 'deadline_bar_close'
+# The exit is dated at the close of the bar that held it (15m bars cannot place it inside the bar).
+LABEL_RESOLVED_AT = 'bar_close'
+# The next open is at or through the stop, or through target_cap_price: the setup was invalidated
+# before the fill, so there is no entry and no realized R (label `no_entry`).
+LABEL_NO_ENTRY_RULE = 'open_at_or_through_stop_or_through_cap'
+# Settled funding printed during the hold: fill_time < funding_time < resolved_at. Notional is the print's mark price,
+# else the entry price. Positive means received.
+LABEL_FUNDING_WINDOW = 'after_fill_before_exit'
+LABEL_FUNDING_NOTIONAL = 'mark_price_else_entry'
+# Completeness: Binance USDT-M settles every 8h by default (4h or 1h only while a symbol sits at its cap or floor),
+# so 8h is the longest normal gap between prints. A hole longer than this plus the slack means a print is missing.
+LABEL_FUNDING_MAX_INTERVAL_HOURS = 8
+LABEL_FUNDING_GAP_SLACK_MINUTES = 5
+# A label still waiting for funding this long after its exit became visible is written with the funding seen so
+# far and `funding_partial = true`.
+LABEL_FUNDING_STALL_CAP_HOURS = 24
 
 # ---------------------------------------------------------------------------
 # Lookbacks

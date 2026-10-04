@@ -1,6 +1,6 @@
 # Handoff — Phase 1 signals loop
 
-Written 2026-10-03. Spec: [`self-learning-crypto-signals.md`](../../self-learning-crypto-signals.md). Plan: `phase_1_signals_loop_cdbc8e73.plan.md`. Detailed contracts: [`BUILD-LOG.md`](BUILD-LOG.md).
+Written 2026-10-03, updated 2026-10-04 after M6. Spec: [`self-learning-crypto-signals.md`](../../self-learning-crypto-signals.md). Plan: `phase_1_signals_loop_cdbc8e73.plan.md`. Detailed contracts: [`BUILD-LOG.md`](BUILD-LOG.md).
 
 ## Goal
 
@@ -16,10 +16,11 @@ Private paper-only crypto signals loop on the Win10 laptop: ingest → features 
 | M3 Feature engine | done | `dfc9ba9` |
 | M3.1 Pre-M4 decisions | done | see `git log` (commit after `dfc9ba9`) |
 | M4 Frozen rules | done | `3ba592a` |
-| M5 Options check | done | see `git log` (commit after `3ba592a`) |
-| M6–M10 | pending | — |
+| M5 Options check | done | `2994b6f` |
+| M6 Barrier labeler | done | see `git log` (commit after `2994b6f`) |
+| M7–M10 | pending | — |
 
-Working tree clean. **1158 tests pass.** DB `signals` at Alembic head `c52e9b8a4f17`. `RULE_VERSION = 'phase1-v4'`, `rule_hash = c13d04dd3d5b3970aaae23bce7be26e5e3d6539e7b361c5e459a04908f4631cd`.
+Working tree clean. **1326 tests pass.** DB `signals` at Alembic head `d8b2f6a31e05` (0 candidates, 0 labels). `RULE_VERSION = 'phase1-v5'`, `rule_hash = dd943a83c5966117ea8d58089f4c378a1ec2506239c91c108938276d4b31ba8c`.
 
 ## Decisions locked
 
@@ -34,10 +35,17 @@ Working tree clean. **1158 tests pass.** DB `signals` at Alembic head `c52e9b8a4
 - **Swing break = event + state, both stateless.** `swing_break_event`: the latest completed 4h close is beyond swing S, the previous 4h close was not, and this 15m bar's close is that 4h close. No grace window. `swing_break_state` (direction permission for the 15m triggers): the 4h close is beyond S and `chandelier_stop_distance_atr > 0`. It ends when a 4h close moves back through S or the distance is <= 0. `swing_break_direction` gives the side for both. Old column `swing_break` was renamed to `swing_break_state`.
 - **M4 rules.** `swing_break` trigger fires on the event; the state is only the direction permission. Setup families frozen (CHECK): `breakout`, `pullback`, `squeeze`, `reversion`, 1:1 from the trigger. Direction vote `MIN_NET = 0` (the break direction stands unless the opposing votes outnumber the confirming ones; owner-confirmed). Candidates are created `watch` + `pending_options_check`; `stop_price` holds the pre-options stop until M5 overwrites it. Locked book = sha256 of `{coin, bar_close}` mod 5. Full list in the M4 entry of `BUILD-LOG.md`.
 - **M5 options.** OI floors owner-set: BTC 100,000, ETH 400,000 (coin units, about 30% of the 2026-10-03 books); confidence full at 2x the floor. With a stale, missing or thin book, BTC/ETH get `ignore` and stay `watch`; alts (no Deribit book) proceed. Deribit staleness does NOT stand the whole book down (owner-confirmed). Large expiry = nearest expiry >= 5% of total OI; near-dated = 72h. `expiry_pin` -> `delayed`; headwind with < 0.5R room -> `cancelled`. Full list in the M5 entry of `BUILD-LOG.md`.
+- **M6 labeler.** Fill = open of the next perp 15m bar; `entry_price`, `one_r`, barriers and `vertical_deadline` are written once (guarded UPDATE + DB trigger `candidate_freeze_fill_values`). Every status except `pending_options_check` is labeled, live and replay, shadow included. **Labeler semantics are hashed** (`LABEL_*` in `constants.py`, guard test), and the job only labels candidates whose `rule_hash` equals the current one; others count as `stale_rule_hash`. Owner-level calls (made by the orchestrator, 2026-10-04):
+  - Next open at/through the stop or through `target_cap_price` -> `first_barrier='no_entry'` label with every R NULL. M8 excludes these from expectancy and reports their rate.
+  - Stop and target touched in one bar -> stop, `barrier_ambiguous=true`. M8 reports the ambiguous share; above 5%, revisit with on-demand Binance 1m klines for those bars only.
+  - Gap through stop exits at the open (R below -1); gap through target exits at the target. Timeout exits at the deadline bar close.
+  - Funding waits for complete prints (hole tolerance 8h + 5 min, the Binance default max); after a 24h stall the label is written with `funding_partial=true`.
+  - Label-only context columns (`cmi_*`, `lead_venue*`, etc.) stay NULL; M8 fills them in a NULL -> value-once enrichment step if its stats need them.
+  - Full list in the M6 entry of `BUILD-LOG.md`.
 
 ## Open
 
-Independent sample = group first row vs mean (M8). M3.1 Ambiguity 1: the state is measured against the last confirmed swing, so a new swing that forms after the break can end it early. Revisit if replay shows it matters.
+Independent sample = group first row vs mean (M8). M3.1 Ambiguity 1: the state is measured against the last confirmed swing, so a new swing that forms after the break can end it early. Revisit if replay shows it matters. M6: a symbol Binance has moved to 1h or 4h funding is held to the 8h hole tolerance, so a single missed print there goes undetected; if M8 shows funding matters, read `GET /fapi/v1/fundingInfo` for per-symbol intervals. Labeler and rules jobs are not scheduled yet (M10).
 
 ## Key files
 
@@ -72,8 +80,8 @@ Subagents don't see the chat. Each brief must name the milestone, point to this 
 
 ## Next step
 
-1. Run **M6 — barrier labeler** (Sonnet 5.5 high subagent, Bugbot review): write `entry_price` (next bar's open), `one_r`, barrier prices and `vertical_deadline` exactly once; label first barrier hit with no lookahead; labels carry `feature_hash`, `rule_hash`, `code_version`. Label shadow rows too. Read the M4 and M5 entries for the price layers (`stop_price`, `target_cap_price`) and statuses.
-2. Then M7 replay (decide covered-coin replay rows without Deribit history) → M8 stats → M9 API/UI → M10 gate.
+1. Run **M7 — replay** (Composer 2.5 fast subagent, Opus diff review + live/replay parity tests): replay rows use `source='replay'` through the same feature → rules → options → label path and the `as_of` gate. Decide first how BTC/ETH replay rows are handled without Deribit history (today a missing book gives `ignore` and the row stays `watch`, which the labeler still labels). Replay must produce candidates under the current `rule_hash` or the labeler skips them. Read the M4, M5 and M6 entries.
+2. Then M8 stats (carries the M6 requirements: exclude `no_entry`, report ambiguous and `funding_partial` shares) → M9 API/UI → M10 gate.
 
 Local run (from `repo/api`):
 

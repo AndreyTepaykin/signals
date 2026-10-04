@@ -87,7 +87,7 @@ class Label(CreatedAt, Base):
     resolved_at: Mapped[datetime] = mapped_column(nullable=False)
     first_barrier: Mapped[str] = mapped_column(
         nullable=False,
-        comment='upper | lower | vertical - whichever traded first.',
+        comment='upper | lower | vertical - whichever traded first - or no_entry: the next open was at or through the stop (or through the cap), so there is no trade and every R column is NULL.',
     )
     barrier_ambiguous: Mapped[bool] = mapped_column(
         nullable=False,
@@ -99,26 +99,31 @@ class Label(CreatedAt, Base):
         server_default='false',
         comment='Stop gapped, so it filled at the worse of the stop and the open.',
     )
-    hours_to_resolution: Mapped[Hours] = mapped_column(nullable=False)
+    hours_to_resolution: Mapped[Hours | None] = mapped_column(nullable=True)
+    funding_partial: Mapped[bool] = mapped_column(
+        nullable=False,
+        server_default='false',
+        comment='Funding was still incomplete when the stall cap passed: funding_r holds the prints seen so far.',
+    )
 
     # ---- Stored R and its decomposition ----
-    price_r: Mapped[RValue] = mapped_column(nullable=False, comment='Price move at resolution, in R, before costs.')
-    fees_r: Mapped[RValue] = mapped_column(
-        nullable=False,
+    price_r: Mapped[RValue | None] = mapped_column(nullable=True, comment='Price move at resolution, in R, before costs.')
+    fees_r: Mapped[RValue | None] = mapped_column(
+        nullable=True,
         comment='Frozen taker fee plus slippage, both sides, in R. Non-negative cost magnitude.',
     )
-    funding_r: Mapped[RValue] = mapped_column(
-        nullable=False,
+    funding_r: Mapped[RValue | None] = mapped_column(
+        nullable=True,
         comment='Funding that ACTUALLY printed during the hold, in R. Signed; positive means received.',
     )
-    stored_r: Mapped[RValue] = mapped_column(
-        nullable=False,
+    stored_r: Mapped[RValue | None] = mapped_column(
+        nullable=True,
         comment='price_r - fees_r + funding_r. The one number expectancy is computed from.',
     )
 
     # ---- Excursions ----
-    mae_r: Mapped[RValue] = mapped_column(
-        nullable=False,
+    mae_r: Mapped[RValue | None] = mapped_column(
+        nullable=True,
         comment='Maximum adverse excursion until the FIRST barrier, as a non-negative magnitude in R.',
     )
     mfe_r: Mapped[RValue | None] = mapped_column(nullable=True, comment='Diagnostic only.')
@@ -187,8 +192,10 @@ class Label(CreatedAt, Base):
         comment='LABEL ONLY. Residual over the hold. A flat residual marks an alt duplicate.',
     )
 
-    # ---- Provenance of the resolution itself ----
-    code_version: Mapped[str | None] = mapped_column(nullable=True, comment='Resolver version that wrote this row.')
+    # ---- The three hashes ----
+    feature_hash: Mapped[str] = mapped_column(nullable=False, comment="The candidate's feature_hash: the features behind the decision.")
+    rule_hash: Mapped[str] = mapped_column(nullable=False, comment="The candidate's rule_hash: the frozen rules that took the decision.")
+    code_version: Mapped[str] = mapped_column(nullable=False, comment='Resolver version that wrote this row.')
 
     __table_args__ = (
         E.one_of('first_barrier', E.FIRST_BARRIERS),
@@ -208,6 +215,18 @@ class Label(CreatedAt, Base):
         CheckConstraint(
             f'abs(stored_r - (price_r - fees_r + funding_r)) <= {_R_ULP}',
             name='stored_r_decomposition',
+        ),
+        # no_entry: the setup was invalid before the fill, so there is no trade and no number. Every other label has all of them.
+        CheckConstraint(
+            f"first_barrier <> '{E.BARRIER_NO_ENTRY}' OR (price_r IS NULL AND fees_r IS NULL AND funding_r IS NULL"
+            ' AND stored_r IS NULL AND mae_r IS NULL AND mfe_r IS NULL AND hours_to_mfe IS NULL AND hours_to_resolution IS NULL'
+            ' AND NOT barrier_ambiguous AND NOT gapped_stop AND NOT funding_partial)',
+            name='no_entry_has_no_r',
+        ),
+        CheckConstraint(
+            f"first_barrier = '{E.BARRIER_NO_ENTRY}' OR (price_r IS NOT NULL AND fees_r IS NOT NULL AND funding_r IS NOT NULL"
+            ' AND stored_r IS NOT NULL AND mae_r IS NOT NULL AND hours_to_resolution IS NOT NULL)',
+            name='filled_label_has_r',
         ),
         Index('ix_label_resolved_at', 'resolved_at'),
         Index('ix_label_first_barrier_resolved_at', 'first_barrier', 'resolved_at'),

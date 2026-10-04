@@ -355,6 +355,9 @@ def a_label(candidate, **overrides) -> Label:
         'stored_r': Decimal('0.984'),
         'mae_r': Decimal('0.3'),
         'cost_assumption_bps': Decimal('12'),
+        'feature_hash': candidate.feature_hash,
+        'rule_hash': candidate.rule_hash,
+        'code_version': 'deadbee',
     }
     values.update(overrides)
     return Label(**values)
