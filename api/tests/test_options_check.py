@@ -55,6 +55,7 @@ def inputs(book: BookView | None = None, **overrides) -> CheckInputs:
         pre_options_target_price=D('102'),
         with_break=True,
         book=view() if book is None else book,
+        source='live',
         oi_floor=500.0,
         use_configured_floor=False,
     )
@@ -103,6 +104,24 @@ def test_a_covered_coin_with_no_visible_snapshot_does_not_alert():
     assert d.verdict == 'ignore' and d.ignore_reason == C.OPTIONS_IGNORE_NO_SNAPSHOT
     assert (d.status, d.status_reason) == ('watch', 'options_ignored:no_snapshot')
     assert d.venue == 'deribit' and d.metric_id is None and d.stop_price == D('98')
+
+
+def test_replay_with_no_book_uses_the_no_options_history_marker():
+    d = check_options(replace(inputs(), book=None, source='replay'))
+    assert d.verdict == 'ignore' and d.ignore_reason == C.OPTIONS_IGNORE_NO_HISTORY
+    assert (d.status, d.status_reason) == ('watch', 'options_ignored:no_options_history')
+
+
+def test_replay_with_a_visible_book_matches_live():
+    book = view()
+    live = check_options(replace(inputs(), book=book, source='live'))
+    replay = check_options(replace(inputs(), book=book, source='replay'))
+    assert (live.verdict, live.status, live.status_reason, live.stop_price) == (
+        replay.verdict,
+        replay.status,
+        replay.status_reason,
+        replay.stop_price,
+    )
 
 
 def test_a_snapshot_older_than_15_minutes_is_ignored_and_does_not_alert():

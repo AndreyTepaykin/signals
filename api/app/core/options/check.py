@@ -54,6 +54,7 @@ from typing import Any
 from app.core import constants as C
 from app.core.options.metrics import StrikeOI
 from app.core.rules.stops import PRICE_QUANTUM
+from app.models import enums as E
 
 STATUS_ALERT = 'alert'
 STATUS_WATCH = 'watch'
@@ -106,6 +107,8 @@ class CheckInputs:
     #: The signal is in the direction of the 4h break (true for every M4 candidate by construction).
     with_break: bool
     book: BookView | None
+    #: ``live`` or ``replay``; replay rows with no book use ``OPTIONS_IGNORE_NO_HISTORY`` instead of ``no_snapshot``.
+    source: str
     #: Per-coin OI floor in underlying-coin units; defaults to ``OPTIONS_OI_FLOOR_BY_COIN`` (empty today).
     oi_floor: float | None = None
     use_configured_floor: bool = True
@@ -161,6 +164,8 @@ def _ignore_reason(inputs: CheckInputs, floor: float | None) -> str | None:
     if inputs.coin not in C.OPTIONS_CURRENCY_BY_COIN:
         return C.OPTIONS_IGNORE_NO_BOOK_FOR_COIN
     if book is None:
+        if inputs.source == E.SOURCE_REPLAY and inputs.coin in C.OPTIONS_CURRENCY_BY_COIN:
+            return C.OPTIONS_IGNORE_NO_HISTORY
         return C.OPTIONS_IGNORE_NO_SNAPSHOT
     if inputs.decision_time - book.snapshot_time > timedelta(minutes=C.OPTIONS_SNAPSHOT_MAX_AGE_MINUTES):
         return C.OPTIONS_IGNORE_SNAPSHOT_TOO_OLD

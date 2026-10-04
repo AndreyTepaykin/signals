@@ -30,7 +30,7 @@ from types import MappingProxyType
 # ---------------------------------------------------------------------------
 # Rule version (hashed together with the constants below).
 # ---------------------------------------------------------------------------
-RULE_VERSION = 'phase1-v5'
+RULE_VERSION = 'phase1-v6'
 
 # ---------------------------------------------------------------------------
 # Horizons and vertical barriers
@@ -305,7 +305,8 @@ OPTIONS_INFLUENCE_BY_VERDICT = MappingProxyType(
 # Machine-readable `candidate.status_reason` codes written by the options check.
 STATUS_REASON_OPTIONS_IGNORED_PREFIX = 'options_ignored:'  # + one of the OPTIONS_IGNORE_* codes
 OPTIONS_IGNORE_NO_BOOK_FOR_COIN = 'no_options_book'  # the coin has no Deribit book (alts)
-OPTIONS_IGNORE_NO_SNAPSHOT = 'no_snapshot'  # a covered coin with no visible snapshot / metric
+OPTIONS_IGNORE_NO_SNAPSHOT = 'no_snapshot'  # a covered coin with no visible snapshot / metric (live)
+OPTIONS_IGNORE_NO_HISTORY = 'no_options_history'  # replay: no Deribit history at the decision instant
 OPTIONS_IGNORE_SNAPSHOT_TOO_OLD = 'snapshot_stale'  # older than OPTIONS_SNAPSHOT_MAX_AGE_MINUTES at the decision
 OPTIONS_IGNORE_OI_FLOOR_UNSET = 'oi_floor_unset'  # OPTIONS_OI_FLOOR_BY_COIN has no entry for the coin
 OPTIONS_IGNORE_OI_BELOW_FLOOR = 'oi_below_floor'

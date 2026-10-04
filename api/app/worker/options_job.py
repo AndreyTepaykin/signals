@@ -33,8 +33,9 @@ pending -> alert (the spec's ``ignore`` "leaves size, stop, and targets unchange
 Replay
 ------
 There is no historical Deribit book (the endpoint is point-in-time only), so a replay over a period before the
-first stored snapshot has no book for any covered coin. Those rows come out ``ignore`` / ``no_snapshot`` and, for BTC and
-ETH, stay ``watch``. M7 must report that gap rather than read it as "no options effect".
+first stored snapshot has no book for any covered coin. Those rows come out ``ignore`` / ``no_options_history`` (not
+``no_snapshot``, which is live-only) and, for BTC and ETH, stay ``watch``. M8 must never pool them with live rows that
+went through the options layer on a real book.
 """
 
 from __future__ import annotations
@@ -180,6 +181,7 @@ def load_check_inputs(session: Session, candidate: Candidate) -> tuple[CheckInpu
             pre_options_target_price=None if candidate.pre_options_target_price is None else Decimal(candidate.pre_options_target_price),
             with_break=candidate.direction == rule_inputs.swing_break_direction,
             book=load_book_view(session, candidate.coin, candidate.horizon, decision_time),
+            source=candidate.source,
         ),
         RESULT_CHECKED,
     )
