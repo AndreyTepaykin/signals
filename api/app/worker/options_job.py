@@ -65,6 +65,7 @@ from app.models.as_of import as_of
 from app.models.decisions import Candidate
 from app.models.features import FeatureRow
 from app.models.options import OptionsMetric, OptionsSnapshot
+from app.worker import estimates as EST
 from app.worker.feature_job import REFERENCE_COIN
 
 log = logging.getLogger(__name__)
@@ -211,6 +212,28 @@ def decision_values(decision: OptionsDecision) -> dict[str, Any]:
     }
 
 
+def _write_estimate_after_check(session: Session, candidate: Candidate, decision: OptionsDecision) -> None:
+    """The options path is known now: write the pooled estimate (NULL -> value once). Changes no status, stop or cap."""
+    path = EST.options_path_of(
+        source=candidate.source,
+        coin=candidate.coin,
+        options_verdict=decision.verdict,
+        status_reason=decision.status_reason,
+        options_snapshot_time=decision.snapshot_time,
+    )
+    if path is None:
+        return
+    target = EST.target_for(
+        decision_time=candidate.decision_time,
+        horizon=candidate.horizon,
+        source=candidate.source,
+        options_path=path,
+        setup_family=candidate.setup_family,
+        trend_family=candidate.trend_family,
+        feature_row=session.get(FeatureRow, candidate.feature_row_id),
+    )
+    EST.fill_safely(session, candidate.id, target)
+
 def check_candidate(session: Session, candidate: Candidate, *, dry_run: bool = False) -> OptionsOutcome:
     """Check one candidate and write the outcome once. Does not commit."""
     inputs, why = load_check_inputs(session, candidate)
@@ -228,6 +251,8 @@ def check_candidate(session: Session, candidate: Candidate, *, dry_run: bool = F
         .returning(Candidate.id)
     ).first()
     result = RESULT_CHECKED if updated is not None else RESULT_RACE
+    if updated is not None:
+        _write_estimate_after_check(session, candidate, decision)
     return OptionsOutcome(**base, result=result, verdict=decision.verdict, status=decision.status, status_reason=decision.status_reason, detail=detail)
 
 

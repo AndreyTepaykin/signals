@@ -5,6 +5,8 @@ from __future__ import annotations
 import dataclasses
 from typing import Any
 
+from app.core import constants as C
+from app.core.stats.reliability import ReliabilityDataset
 from app.core.stats.report import CohortReport, PopulationReport, StatsReport
 from app.core.stats.summary import CellSummary
 
@@ -85,27 +87,77 @@ def format_cohort(c: CohortReport) -> list[str]:
             f'    {r.status:<10} {r.horizon:<9} raw {r.n_no_entry_raw}/{r.n_labels_raw} ({_pct(r.rate_raw)})'
             f' | ind {r.n_no_entry_independent}/{r.n_labels_independent} ({_pct(r.rate_independent)})'
         )
-    rel = c.reliability
-    out.append(f'  reliability (alerts): {rel.note}')
+    out.extend(_reliability_block('alerts', c.reliability))
+    out.extend(_reliability_block('all statuses', c.reliability_all_statuses))
+    out.append('  vs baselines (alerts vs always-flat 0R and vs the NAIVE swing-break rule, same source / coin set / lookback):')
+    for cmp in c.comparisons:
+        b = cmp.baseline
+        s = b.summary
+        interval = 'n/a' if s is None or s.interval_low is None else f'[{s.interval_low:+.3f}, {s.interval_high:+.3f}]'
+        counts = '' if s is None else f' raw/ind {s.n_filled_raw}/{s.n_filled_independent}'
+        out.append(
+            f'    {cmp.scope:<9} app E[R] {_num(cmp.app.expectancy_r)} ind {cmp.app.n_filled_independent}'
+            f' | vs flat: {cmp.vs_flat}'
+            f' | naive[{b.key}] E[R] {_num(b.expectancy_r)} {interval}{counts}'
+            f' | vs naive: {cmp.vs_swing_break}'
+            + (f'  ** baseline {s.sample_note}' if s is not None and s.insufficient_sample else '')
+            + (f'  ** app {cmp.app.sample_note}' if cmp.app.insufficient_sample else '')
+        )
+        r = cmp.baseline_candidates_subset
+        out.append(
+            f'        baseline_candidates_subset E[R] {_num(r.summary.expectancy_r)} ind {r.summary.n_filled_independent}'
+            f' (rows {r.n_swing_break_rows}, excluded options-modified {r.n_excluded_options_modified}) | {cmp.vs_candidates_subset}'
+        )
+    for label, k in (('kill rule (binding, live)', c.kill_rule), ('kill_rule_preview (advisory, replay)', c.kill_rule_preview)):
+        if k is not None:
+            out.append(f'  {label}: {k.status}: {k.note}')
+    if c.kill_rule is None and c.kill_rule_preview is None:
+        out.append('  kill rule: not evaluated (thin lookback cohorts get neither the rule nor a preview)')
+    w = c.would_abstain
+    out.append(
+        f'  would_abstain (alerts; no rule applied): {w.would_abstain} of {w.alerts_with_estimate} with a pool >= {C.POOL_MIN_INDEPENDENT_OUTCOMES}'
+        f' ({w.alerts} filled alerts) | independent {w.would_abstain_independent} of {w.alerts_with_estimate_independent} ({w.alerts_independent})'
+        f' | cost: {w.cost_basis}'
+    )
+    return out
+
+
+def _reliability_block(label: str, rel: ReliabilityDataset) -> list[str]:
+    out = [f'  reliability ({label}): {rel.note}']
     for b in rel.bins:
         if b.n_raw or b.n_independent:
             shown = 'hidden' if b.hidden else f'p {b.mean_probability:.3f} obs {b.observed_rate:.3f} R {b.mean_stored_r:+.3f}'
             out.append(f'    [{b.low:.1f}, {b.high:.1f}) raw {b.n_raw} ind {b.n_independent}: {shown}')
-    out.append('  vs baselines (alerts vs always-flat 0R and vs swing-break rule):')
-    for cmp in c.comparisons:
-        b = cmp.baseline
-        out.append(
-            f'    {cmp.scope:<9} app E[R] {_num(cmp.app.expectancy_r)} ind {cmp.app.n_filled_independent}'
-            f' | vs flat: {cmp.vs_flat}'
-            f' | swing-break E[R] {_num(b.summary.expectancy_r)} {"" if b.summary.interval_low is None else f"[{b.summary.interval_low:+.3f}, {b.summary.interval_high:+.3f}]"}'
-            f' raw/ind {b.summary.n_filled_raw}/{b.summary.n_filled_independent} (rows {b.n_swing_break_rows}, excluded options-modified {b.n_excluded_options_modified})'
-            f' | vs swing-break: {cmp.vs_swing_break}'
-            + (f'  ** baseline {b.summary.sample_note}' if b.summary.insufficient_sample else '')
-            + (f'  ** app {cmp.app.sample_note}' if cmp.app.insufficient_sample else '')
+    if rel.available:
+        monotone = 'cannot be checked (fewer than two visible bins)' if rel.r_non_decreasing is None else (
+            'yes' if rel.r_non_decreasing else 'NO'
         )
-    k = c.kill_rule
-    out.append(f'  kill rule: {k.status}: {k.note}')
+        gap = 'n/a' if rel.max_abs_gap is None else f'{rel.max_abs_gap:.3f}'
+        out.append(f'    visible bins {rel.visible_bins} | max |p - observed| {gap} | higher bins show higher average R: {monotone}')
     return out
+
+
+def _baseline_block(report: StatsReport) -> list[str]:
+    out = ['NAIVE SWING-BREAK BASELINE (the published rule traded on every 4h break; no votes / gates / options; cohorts never pooled)']
+    if not report.baseline_available:
+        return out + ['  not computed']
+    for b in report.baseline_cohorts:
+        st = b.stats
+        out.append(
+            f'  {b.key.label:<28} events {st.events} | no_stop {st.no_stop} | skipped while hold open {st.skipped_hold_open}'
+            f' | taken {st.taken} (pending {st.pending}, no_entry {st.no_entry}, filled {st.filled})'
+        )
+        out.append('    ' + cell_line(b.overall, 'all: ', short_flag=True))
+        for horizon, s in b.by_horizon.items():
+            out.append('      ' + cell_line(s, f'{horizon:<8} ', short_flag=True))
+    return out
+
+def _kill_summary(c: CohortReport) -> str:
+    if c.kill_rule is not None:
+        return c.kill_rule.status
+    if c.kill_rule_preview is not None:
+        return c.kill_rule_preview.status
+    return 'none (thin)'
 
 
 def format_text(report: StatsReport) -> str:
@@ -121,8 +173,10 @@ def format_text(report: StatsReport) -> str:
         lines.append(
             f'  {c.cohort.label:<46} alerts {a.n_labels_raw}/{a.n_labels_independent}'
             f' (filled ind {a.n_filled_independent}) | shadow {s.n_labels_raw}/{s.n_labels_independent}'
-            f' (filled ind {s.n_filled_independent}) | kill rule: {c.kill_rule.status}'
+            f' (filled ind {s.n_filled_independent}) | kill rule: {_kill_summary(c)}'
         )
+    lines.append('')
+    lines.extend(_baseline_block(report))
     lines.append('')
     for cohort in report.cohorts:
         lines.extend(format_cohort(cohort))

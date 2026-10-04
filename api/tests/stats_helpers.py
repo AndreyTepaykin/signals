@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.core.stats.observations import Observation
+from app.core.stats.observations import BaselineObservation, Observation
 
 UTC = timezone.utc
 #: After the thin-lookback cutoff (2026-09-24), so an observation is `full` unless a test says otherwise.
@@ -16,8 +16,7 @@ T0 = datetime(2026, 10, 1, 0, 0, tzinfo=UTC)
 _ids = itertools.count(1)
 
 
-def obs(**overrides: Any) -> Observation:
-    """A filled, full-lookback, replay, alt (no options book) alert that won +1R. Override anything."""
+def _values(overrides: dict[str, Any]) -> dict[str, Any]:
     n = next(_ids)
     values: dict[str, Any] = {
         'candidate_id': n,
@@ -48,7 +47,19 @@ def obs(**overrides: Any) -> Observation:
         'barriers_unmodified': True,
     }
     values.update(overrides)
-    return Observation(**values)
+    return values
+
+
+def obs(**overrides: Any) -> Observation:
+    """A filled, full-lookback, replay, alt (no options book) alert that won +1R. Override anything."""
+    return Observation(**_values(overrides))
+
+
+def baseline_obs(**overrides: Any) -> BaselineObservation:
+    """A naive-baseline trade (no options layer, so no verdict or reason). Same defaults as obs."""
+    values = {'status_reason': None, 'options_verdict': None}
+    values.update(overrides)
+    return BaselineObservation(**_values(values))
 
 
 def no_entry(**overrides: Any) -> Observation:

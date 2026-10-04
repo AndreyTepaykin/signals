@@ -8,8 +8,8 @@ higher bins show higher average R, and Brier score sits beside expectancy." and 
   dropped), counted by the same `collapse_independent` as everything else.
 * A bin under `params.MIN_BIN_OUTCOMES` independent outcomes is returned with `hidden=True` and every value withheld
   (None): the dataset itself does not carry the number, so a chart cannot draw it by accident. Its counts stay.
-* "Hit" is `first_barrier == 'upper'`; a timeout or a stop is a miss. That reading of "upper before stop" for a timeout
-  is an assumption, listed as an owner question: no probability is stored today, so it is unexercised on real data.
+* "Hit" is `first_barrier == 'upper'`; a timeout (`vertical`) or a stop is a miss (owner decision, M8.1: the same definition the pooled
+  estimate uses for `p_upper_before_stop`).
 * Nothing here invents a probability. With none stored the dataset is returned empty with an explanatory note.
 """
 

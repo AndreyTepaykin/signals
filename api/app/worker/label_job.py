@@ -46,6 +46,7 @@ from app.core import constants as C
 from app.core.hashing import code_version as current_code_version
 from app.core.hashing import rule_hash as current_rule_hash
 from app.core.labeler import barriers as B
+from app.core.labeler import outcome as O
 from app.core.time import ensure_utc, utc_now, vertical_barrier_deadline
 from app.models import enums as E
 from app.models.as_of import as_of
@@ -63,21 +64,16 @@ RESULT_RACE = 'already_labeled'
 RESULT_DRY = 'dry_run'
 RESULT_ERROR = 'error'
 
-PENDING_ENTRY_BAR = 'entry_bar_not_visible'
-PENDING_AWAITING_BARS = 'awaiting_bars'
-PENDING_MISSING_BAR = 'missing_bar'
-PENDING_FUNDING = 'funding_incomplete'
+PENDING_ENTRY_BAR = O.PENDING_ENTRY_BAR
+PENDING_AWAITING_BARS = O.PENDING_AWAITING_BARS
+PENDING_MISSING_BAR = O.PENDING_MISSING_BAR
+PENDING_FUNDING = O.PENDING_FUNDING
 
 #: A bar this far past its own close and still absent is a hole in the feed, not a delay (reporting only).
 MISSING_BAR_AFTER = 2 * B.BAR_LENGTH
 
-
-@dataclass(frozen=True)
-class NoEntry:
-    """The fill is frozen but carries no barriers: the open was at or through the stop or the cap."""
-
-    entry: Decimal
-    reason: str
+#: The fill is frozen but carries no barriers: the open was at or through the stop or the cap.
+NoEntry = O.NoEntry
 
 
 @dataclass(frozen=True)
@@ -220,30 +216,28 @@ def freeze_fill(session: Session, candidate: Candidate, as_of_time: datetime, *,
         return stored_fill(candidate)
     fill_time = ensure_utc(candidate.bar_close)
     entry_bars = load_bars(session, as_of_time, candidate.coin, fill_time, fill_time + B.BAR_LENGTH)
-    if not entry_bars or entry_bars[0].open_time != fill_time:
-        return PENDING_ENTRY_BAR
-    entry = entry_bars[0].open
-    fill: B.Barriers | NoEntry
-    try:
-        fill = B.plan_barriers(
-            direction=candidate.direction,
-            entry=entry,
-            stop=candidate.stop_price,
-            cap=candidate.target_cap_price,
-            fill_time=fill_time,
-            horizon=candidate.horizon,
-        )
-        values: dict[str, Any] = dict(
+    fill = O.plan_fill(
+        direction=candidate.direction,
+        stop=candidate.stop_price,
+        cap=candidate.target_cap_price,
+        fill_time=fill_time,
+        horizon=candidate.horizon,
+        entry_bars=entry_bars,
+    )
+    if isinstance(fill, str):
+        return fill
+    values: dict[str, Any]
+    if isinstance(fill, B.Barriers):
+        values = dict(
             entry_price=fill.entry,
             one_r=fill.one_r,
             upper_barrier_price=fill.upper,
             lower_barrier_price=fill.lower,
             vertical_deadline=fill.deadline,
         )
-    except B.BarrierPlanError as exc:
-        fill = NoEntry(entry, exc.reason)
+    else:
         values = dict(
-            entry_price=entry,
+            entry_price=fill.entry,
             one_r=None,
             upper_barrier_price=None,
             lower_barrier_price=None,
@@ -357,19 +351,22 @@ def label_candidate(
             barriers = frozen
 
             bars = load_bars(session, as_of_time, candidate.coin, fill_time, barriers.deadline)
-            resolution = B.resolve(candidate.direction, barriers, bars, fill_time)
-            if isinstance(resolution, B.Pending):
-                late = resolution.next_open + MISSING_BAR_AFTER <= ensure_utc(as_of_time)
-                return LabelOutcome(**base, result=RESULT_PENDING, detail=PENDING_MISSING_BAR if late else PENDING_AWAITING_BARS)
-
-            prints = load_funding(session, as_of_time, candidate.coin, fill_time - gap, resolution.resolved_at)
-            partial = False
-            if not B.funding_window_complete([p.funding_time for p in prints], fill_time, resolution.resolved_at, gap):
-                if not B.funding_stalled(resolution.visible_at, as_of_time):
-                    return LabelOutcome(**base, result=RESULT_PENDING, detail=PENDING_FUNDING)
-                partial = True
-            funding_r, funding_bps = B.realized_funding(candidate.direction, prints, barriers, fill_time, resolution.resolved_at)
-            values = label_values(candidate, barriers, resolution, funding_r, funding_bps, partial, feature_row, code_version)
+            outcome = O.resolve_outcome(
+                direction=candidate.direction,
+                barriers=barriers,
+                bars=bars,
+                load_prints=lambda start, end: load_funding(session, as_of_time, candidate.coin, start, end),
+                fill_time=fill_time,
+                as_of_time=ensure_utc(as_of_time),
+                funding_max_gap=gap,
+                missing_bar_after=MISSING_BAR_AFTER,
+            )
+            if isinstance(outcome, O.Waiting):
+                return LabelOutcome(**base, result=RESULT_PENDING, detail=outcome.detail)
+            resolution, partial = outcome.resolution, outcome.funding_partial
+            values = label_values(
+                candidate, barriers, resolution, outcome.funding_r, outcome.funding_bps, partial, feature_row, code_version
+            )
             summary = dict(first_barrier=resolution.first_barrier, stored_r=values['stored_r'], funding_partial=partial)
             if dry_run:
                 return LabelOutcome(**base, result=RESULT_DRY, **summary)

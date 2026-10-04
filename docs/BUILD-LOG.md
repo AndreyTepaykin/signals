@@ -903,3 +903,48 @@ A pure stats engine over labeled candidates, plus a read-only report job. Every 
 | replay / no_options_history / thin | 0 / 0 | 285 / 20 | - |
 
   Swing-break baselines have 18 and 20 independent samples: too small to conclude. Kill rule not yet applicable (largest independent n 70 of 300). The only positive interval is in the thin-lookback cohort, which runs on less history than the engine's windows; the full-lookback cohort straddles zero.
+
+## M8.1 - Stats follow-ups: pooled estimate, naive baseline, live-only kill rule
+
+- Date: 2026-10-04
+- Model: Claude Sonnet 5.5 high (implementer), Claude Opus 5.5 (orchestrator: decided the M8 open questions, reviewed), Bugbot (no findings)
+
+The four M8 owner questions were decided by the orchestrator at the owner's request, mostly from the spec text. No hashed value changed (`rule_hash` still `ee25b0d7...`), no migration.
+
+### Decisions (orchestrator, 2026-10-04)
+1. **Probability = the spec's pooled estimate** ("Label contract" table): P(upper before stop) = share of pooled independent outcomes where the upper barrier traded first; with it expected R, expected MAE, median hours, the 90% interval, pool level and pool n. Edge-line walk-up, first level with >= 30 independent outcomes in 90 days, else every estimate NULL. Pool keys that never walk away: horizon, source, options path. Thin-lookback outcomes and `no_entry` are not pooled; every status is pooled (the options check does not edit P). Point in time: only outcomes resolved plus the kline settle lag at or before the decision.
+2. **Timeout counts as a miss for calibration** (hit = `first_barrier = 'upper'`, per the P definition). Win rate stays on stored R > 0.
+3. **Swing-break baseline = the published rule traded naively:** every 4h `swing_break_event`, chandelier stop, same costs, fill, barriers and horizons, one decision per coin per horizon, no votes, gates or options. A baseline drawn from the app's own candidates would be filtered by the app.
+4. **Kill rule binds on live only.** Replay full-lookback cohorts get an advisory `kill_rule_preview` that can never be `triggered`; thin cohorts get neither.
+5. **Abstain rule deferred to M10** (it changes which candidates alert: RULE_VERSION bump and replay rerun, before the first live candidate). Cost reading for M10: stored R is already net of fees, slippage and realized funding, so abstain when the lower bound of net expected R is below the adverse edge of the funding band (i.e. below 0 when that edge is unknown), not below the round-trip fee again.
+
+### Files created or modified
+- `repo/api/app/core/stats/pool.py` (new) - pure pooled estimator (`estimate_pool`, `PoolTarget`, `PoolEstimate`, `NoEstimate`).
+- `repo/api/app/core/stats/baseline.py` (new) - naive swing-break baseline from feature rows.
+- `repo/api/app/core/labeler/outcome.py` (new) - shared pure `plan_fill` / `resolve_outcome`; no new constants.
+- `repo/api/app/worker/label_job.py` - refactored onto the shared core, no behaviour change (old `PENDING_*`, `NoEntry` names kept as aliases).
+- `repo/api/app/worker/estimates.py` (new) - guarded estimate write, enrichment, creation and post-options hooks.
+- `repo/api/app/worker/rules_job.py` - writes the estimate at creation for alts (path already known).
+- `repo/api/app/worker/options_job.py` - writes it after the verdict (BTC/ETH).
+- `repo/api/app/worker/stats_job.py` - baseline in the report; `--enrich-estimates [--dry-run]`.
+- `repo/api/app/core/stats/{observations,report,render,summary,reliability}.py` - horizon-keyed walk-up, naive baseline comparison, kill-rule binding/preview, `would_abstain`, reliability/Brier on stored P.
+- Tests (new): `test_stats_pool.py`, `test_stats_baseline.py`, `test_estimates.py`; updated `stats_helpers.py`, `test_stats_report.py`.
+
+### Contracts frozen
+- Estimate write: `UPDATE candidate ... WHERE <all nine estimate columns> IS NULL` (NULL -> value once, never overwritten), from three paths that share `estimate_pool`: `rules_job` at creation (alts), `options_job` after the verdict (BTC/ETH), `python -m app.worker.stats_job --enrich-estimates [--dry-run]` (one-off, decision order, idempotent). Each live-path write runs in a SAVEPOINT; a failure is logged and never costs the candidate. Status, reason, stop and cap are never touched. The M6 fill trigger does not cover these columns (tested).
+- Baseline cohorts: `(source, alts|covered, lookback)`; independence via `assign_sample_group` on the frozen hold. Parity with an untouched app candidate's label is tested (9 cases: long stop/target/ambiguous/gap-stop/timeout/no-entry, short stop/target/timeout). The old candidate subset survives as `baseline_candidates_subset`.
+- Report: walk-up keyed by horizon at every level; kill rule `binding` (live) vs `kill_rule_preview` (replay full); `would_abstain` is a count only.
+
+### Deferred to a later milestone
+- Abstain rule -> M10, with the cost reading in decision 5. The current `would_abstain` count uses `CI low < fees_r` (stricter than decision 5); align it when the rule is built.
+- Replay labels once at the end of the walk, so the creation hook never finds a pool in replay; after any replay rerun, run `--enrich-estimates`.
+- The baseline reads feature rows, which carry no `rule_hash`; if engine params change, older events are re-traded under the new definition.
+- Every BTC/ETH options path compares against the same `covered` baseline (the baseline has no options layer).
+
+### Deviations from the plan
+- None.
+
+### Verification
+- `cd repo/api; & '.\.venv\Scripts\python.exe' -m pytest -q` -> **`1505 passed in 252.74s`** (1428 before), run by the orchestrator. Bugbot on the uncommitted diff: no bugs.
+- Enrichment on `signals` (dry run, then twice for real, identical): 833 candidates considered, 0 filled, 833 `below_floor`. The best pool has 18 independent outcomes (floor 30): pools use full-lookback labels only, and replay has about 10 full-lookback days (233 of 817 labels). So reliability shows 0 bins, Brier is n/a, `would_abstain` is 0.
+- Naive baseline (independent n, E[R], 90% interval): replay/alts/full 123, -0.125 [-0.178, -0.073]; replay/alts/thin 238, +0.013 [-0.048, +0.070]; replay/covered/full 17, -0.029 [-0.188, +0.152] (too small); replay/covered/thin 31, -0.136 [-0.312, +0.035]. App alerts: `no_options_book/full` -0.039 (n=53, interval includes the baseline mean); `no_options_book/thin` +0.141 (n=70). No live rows: no binding kill rule; previews `preview_not_yet_applicable`.

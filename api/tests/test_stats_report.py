@@ -93,8 +93,8 @@ def test_walk_up_marks_a_cell_that_equals_the_previous_level_and_cells_roll_up()
     assert len(by_level['full_slice'].cells) == 3
     # dropping the event flag merges the two `us` rows; the lone `asia` cell is unchanged
     drop_event = {tuple(c.key.values()): c for c in by_level['drop_event_flag'].cells}
-    us = drop_event[('squeeze', 'chop', 'mid', 'us')]
-    asia = drop_event[('squeeze', 'chop', 'mid', 'asia')]
+    us = drop_event[('swing', 'squeeze', 'chop', 'mid', 'us')]
+    asia = drop_event[('swing', 'squeeze', 'chop', 'mid', 'asia')]
     assert us.summary.n_labels_raw == 2 and not us.same_as_previous_level
     assert asia.same_as_previous_level
     assert by_level['setup_family'].cells[0].summary.n_labels_raw == 3
@@ -180,8 +180,9 @@ def test_comparison_verdicts_against_flat_and_the_baseline():
     cmp_all = cohort.comparisons[0]
     assert cmp_all.scope == 'all'
     assert cmp_all.vs_flat == 'interval_above'
-    assert cmp_all.vs_swing_break == 'interval_above'  # the baseline is only the ten losing swing breaks (-1 R)
-    assert cmp_all.baseline.summary.expectancy_r == pytest.approx(-1.0)
+    assert cmp_all.vs_swing_break == 'baseline_unavailable'  # no naive baseline was computed in this call
+    assert cmp_all.vs_candidates_subset == 'interval_above'  # the old subset is only the ten losing swing breaks (-1 R)
+    assert cmp_all.baseline_candidates_subset.summary.expectancy_r == pytest.approx(-1.0)
     assert cmp_all.flat_expectancy_r == 0.0
 
 
@@ -219,7 +220,9 @@ def test_kill_rule_counts_independent_labels_not_raw_ones():
     group = str(uuid.uuid4())
     rows = [obs(sample_group_id=group, stored_r=-1.0, decision_time=T0 + timedelta(minutes=i)) for i in range(400)]
     cohort_report = R.build_report(rows).cohorts[0]
-    assert cohort_report.kill_rule.status == R.KILL_NOT_APPLICABLE and cohort_report.kill_rule.n_independent == 1
+    assert cohort_report.kill_rule is None  # replay: the rule does not bind
+    assert cohort_report.kill_rule_preview.status == 'preview_not_yet_applicable'
+    assert cohort_report.kill_rule_preview.n_independent == 1
 
 
 def test_kill_rule_without_a_baseline_says_so():
@@ -236,10 +239,10 @@ def test_text_and_json_output_carry_raw_independent_and_the_plain_words():
     text = format_text(report)
     assert 'n=12 independent: too small to conclude' in text
     assert 'labels raw/ind 12/12' in text
-    assert 'kill rule: not_yet_applicable' in text
+    assert 'kill rule: preview_not_yet_applicable' in text
     assert 'COHORT OVERVIEW' in text
     parsed = json.loads(json.dumps(to_jsonable(report), default=str))
-    assert parsed['cohorts'][0]['kill_rule']['status'] == 'not_yet_applicable'
+    assert parsed['cohorts'][0]['kill_rule_preview']['status'] == 'preview_not_yet_applicable'
 
 
 def test_stats_parameters_do_not_feed_rule_hash():
@@ -268,3 +271,138 @@ def test_no_stats_module_reads_the_wall_clock_or_the_database(path):
     assert not any(m.startswith(('sqlalchemy', 'app.models.as_of', 'app.db', 'app.worker')) for m in imported if m != 'app.models'), imported
     for forbidden in ('utc_now', 'datetime.now', 'utcnow', 'time.time'):
         assert forbidden not in source
+
+
+# ---------------------------------------------------------------------------
+# M8.1: walk-up by horizon, naive baseline in the comparison, live-only kill rule, would_abstain, stored-P reliability
+# ---------------------------------------------------------------------------
+from app.core.stats.baseline import BaselineData, BaselineStats  # noqa: E402
+from app.core.stats.observations import BaselineKey  # noqa: E402
+from stats_helpers import baseline_obs, live_btc_layer  # noqa: E402
+
+LIVE = CohortKey('live', 'no_options_book', 'full')
+REPLAY_BASELINE = BaselineKey('replay', 'alts', 'full')
+LIVE_BASELINE = BaselineKey('live', 'alts', 'full')
+
+
+def baseline_data(key, rows):
+    return BaselineData(tuple(rows), {key: BaselineStats(events=len(rows), taken=len(rows), filled=len(rows))})
+
+
+def test_every_walk_up_cell_belongs_to_one_horizon_at_every_level():
+    rows = [obs(horizon='scalp') for _ in range(3)] + [obs(horizon='swing') for _ in range(2)] + [obs(horizon='position')]
+    _skipped, levels = R.walk_up(rows, COHORT)
+    for level in levels:
+        assert level.dimensions[0] == 'horizon'
+        for cell in level.cells:
+            assert cell.key['horizon'] in C.HORIZONS
+    setup_level = next(lv for lv in levels if lv.level == 'setup_family')
+    assert {(c.key['horizon'], c.summary.n_labels_raw) for c in setup_level.cells} == {('scalp', 3), ('swing', 2), ('position', 1)}
+
+
+def test_the_comparison_uses_the_naive_baseline_of_the_matching_source_coin_set_and_lookback():
+    winners = [obs(stored_r=1.0 + (i % 3) * 0.01) for i in range(40)]
+    losers = [baseline_obs(stored_r=-1.0, first_barrier='lower') for _ in range(40)]
+    elsewhere = [baseline_obs(source='live', stored_r=9.0) for _ in range(40)]  # another cohort: must not leak in
+    data = BaselineData(tuple(losers + elsewhere), {REPLAY_BASELINE: BaselineStats(events=80, taken=40, filled=40)})
+    cmp_all = R.build_report(winners, baseline=data).cohorts[0].comparisons[0]
+    assert cmp_all.baseline.key == 'replay/alts/full'
+    assert cmp_all.baseline.expectancy_r == pytest.approx(-1.0)
+    assert cmp_all.vs_swing_break == 'interval_above'
+
+
+def test_a_btc_eth_options_path_cohort_is_compared_with_the_covered_coin_baseline():
+    rows = [live_btc_layer() for _ in range(5)]
+    assert R.baseline_key_for(rows[0].cohort) == BaselineKey('live', 'covered', 'full')
+    assert R.baseline_key_for(CohortKey('replay', 'no_options_history', 'thin')) == BaselineKey('replay', 'covered', 'thin')
+
+
+def test_the_kill_rule_binds_on_live_cohorts_and_can_trigger():
+    rows = [obs(source='live', stored_r=-0.5, first_barrier='lower') for _ in range(300)]
+    data = baseline_data(LIVE_BASELINE, [baseline_obs(source='live', stored_r=0.4) for _ in range(40)])
+    cohort = R.build_report(rows, baseline=data).cohorts[0]
+    assert cohort.cohort == LIVE
+    assert cohort.kill_rule.status == R.KILL_TRIGGERED and cohort.kill_rule.binding
+    assert cohort.kill_rule_preview is None
+
+
+def test_a_replay_cohort_only_gets_a_preview_that_can_never_be_triggered():
+    rows = [obs(stored_r=-0.5, first_barrier='lower') for _ in range(300)]
+    data = baseline_data(REPLAY_BASELINE, [baseline_obs(stored_r=0.4) for _ in range(40)])
+    cohort = R.build_report(rows, baseline=data).cohorts[0]
+    assert cohort.kill_rule is None
+    preview = cohort.kill_rule_preview
+    assert preview.status == 'preview_would_trigger' and not preview.binding
+    assert preview.status != R.KILL_TRIGGERED and 'advisory' in preview.note
+    for status in R.KILL_NOT_APPLICABLE, R.KILL_NOT_TRIGGERED, R.KILL_NO_BASELINE, R.KILL_TRIGGERED:
+        assert R.PREVIEW_STATUS[status] != R.KILL_TRIGGERED and R.PREVIEW_STATUS[status].startswith('preview_')
+
+
+def test_thin_lookback_cohorts_get_neither_the_rule_nor_a_preview():
+    thin = P.THIN_LOOKBACK_CUTOFF - timedelta(days=2)
+    for source in ('live', 'replay'):
+        rows = [obs(source=source, bar_close=thin, stored_r=-0.5, first_barrier='lower') for _ in range(300)]
+        cohort = R.build_report(rows).cohorts[0]
+        assert cohort.kill_rule is None and cohort.kill_rule_preview is None
+    assert 'none (thin)' in format_text(R.build_report(rows))
+
+
+def test_live_cohorts_are_each_judged_against_their_own_baseline():
+    alts = [obs(source='live', stored_r=1.0 + (i % 3) * 0.01) for i in range(300)]
+    btc = [live_btc_layer(stored_r=-0.5, first_barrier='lower') for _ in range(300)]
+    data = BaselineData(
+        tuple([baseline_obs(source='live', stored_r=0.0) for _ in range(40)]
+              + [baseline_obs(source='live', coin='BTCUSDT', stored_r=0.4) for _ in range(40)])
+    )
+    by_path = {c.cohort.options_path: c for c in R.build_report(alts + btc, baseline=data).cohorts}
+    assert by_path['no_options_book'].kill_rule.status == R.KILL_NOT_TRIGGERED
+    assert by_path['options_layer'].kill_rule.status == R.KILL_TRIGGERED
+
+
+def test_without_a_computed_baseline_the_kill_rule_says_it_has_none():
+    rows = [obs(source='live', stored_r=0.1) for _ in range(300)]
+    assert R.build_report(rows).cohorts[0].kill_rule.status == R.KILL_NO_BASELINE
+
+
+def abstain_row(pool_n, ci_low, fees_r=0.06, **kw):
+    return obs(pool_n=pool_n, expected_r_ci_low=ci_low, fees_r=fees_r, **kw)
+
+
+def test_would_abstain_counts_alerts_whose_pool_is_big_enough_and_whose_interval_low_is_under_cost():
+    rows = [
+        abstain_row(30, 0.05),   # pool ok, low below cost 0.06 -> abstain
+        abstain_row(45, 0.06),   # low equals cost: not below
+        abstain_row(31, 0.40),   # clear
+        abstain_row(29, -1.0),   # pool under the floor: no estimate to act on
+        obs(),                   # no estimate stored
+        obs(status='watch', status_reason='vote_conflict', pool_n=40, expected_r_ci_low=-1.0, fees_r=0.06),  # shadow: not an alert
+    ]
+    w = R.build_report(rows).cohorts[0].would_abstain
+    assert (w.alerts, w.alerts_with_estimate, w.would_abstain) == (5, 3, 1)
+    assert w.alerts_independent == 5 and w.would_abstain_independent == 1
+    assert 'funding' in w.cost_basis and 'fees+slippage only' in w.cost_basis
+
+
+def test_would_abstain_is_a_count_only_and_changes_nothing():
+    rows = [abstain_row(40, -1.0) for _ in range(3)]
+    cohort = R.build_report(rows).cohorts[0]
+    assert cohort.would_abstain.would_abstain == 3
+    assert cohort.populations['alert'].overall.n_labels_raw == 3  # the alerts are still alerts
+
+
+def test_reliability_reads_the_stored_probability_for_alerts_and_for_every_status():
+    alerts = with_p(20, 0.25, hit_share=0.2)
+    shadow = [obs(status='watch', status_reason='vote_conflict', p_upper=0.25, first_barrier='lower', stored_r=-1.0) for _ in range(20)]
+    cohort = R.build_report(alerts + shadow).cohorts[0]
+    assert cohort.reliability.n_independent_with_probability == 20
+    assert cohort.reliability_all_statuses.n_independent_with_probability == 40
+    text = format_text(R.build_report(alerts + shadow))
+    assert 'reliability (alerts)' in text and 'reliability (all statuses)' in text
+    assert 'higher bins show higher average R' in text
+
+
+def test_the_text_report_prints_the_naive_baseline_block_and_keeps_the_old_subset_labeled():
+    rows = [obs(stored_r=1.0) for _ in range(12)]
+    text = format_text(R.build_report(rows, baseline=baseline_data(REPLAY_BASELINE, [baseline_obs(stored_r=-1.0)])))
+    assert 'NAIVE SWING-BREAK BASELINE' in text and 'replay/alts/full' in text
+    assert 'baseline_candidates_subset' in text

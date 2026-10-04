@@ -34,7 +34,7 @@ from typing import Any
 import numpy as np
 
 from app.core.stats import params as P
-from app.core.stats.observations import CohortKey, MixedCohortError, Observation
+from app.core.stats.observations import BaselineKey, CohortKey, MixedCohortError, Observation
 from app.models import enums as E
 
 
@@ -55,7 +55,7 @@ def _order(observation: Observation) -> tuple[Any, int]:
     return (observation.decision_time, observation.candidate_id)
 
 
-def require_single_cohort(observations: Sequence[Observation], cohort: CohortKey) -> None:
+def require_single_cohort(observations: Sequence[Observation], cohort: CohortKey | BaselineKey) -> None:
     for observation in observations:
         if observation.cohort != cohort:
             raise MixedCohortError(
@@ -190,7 +190,7 @@ def _share(part: int, whole: int) -> float | None:
     return None if whole == 0 else part / whole
 
 
-def summarize(observations: Sequence[Observation], cohort: CohortKey) -> CellSummary:
+def summarize(observations: Sequence[Observation], cohort: CohortKey | BaselineKey) -> CellSummary:
     """Statistics for one cell. `cohort` is mandatory and every observation must belong to it: pooling is a TypeError-level
     mistake here, not a convention. An empty list is a valid, all-zero cell."""
     require_single_cohort(observations, cohort)

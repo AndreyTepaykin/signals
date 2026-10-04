@@ -135,6 +135,12 @@ class Observation:
     options_snapshot_time: datetime | None
     # True when the options layer left the stop and the target alone, so the label IS the baseline outcome
     barriers_unmodified: bool
+    # M8.1: pool inputs (label) and the stored estimate / cost (candidate); all default to "unknown"
+    mae_r: float | None = None
+    hours_to_resolution: float | None = None
+    fees_r: float | None = None  # round-trip fees + slippage in R (label.fees_r); NULL on a no_entry label
+    pool_n: int | None = None
+    expected_r_ci_low: float | None = None
 
     @property
     def options_path(self) -> str:
@@ -183,3 +189,60 @@ def split_by_cohort(observations: list[Observation]) -> dict[CohortKey, list[Obs
     for observation in observations:
         out.setdefault(observation.cohort, []).append(observation)
     return dict(sorted(out.items()))
+
+
+# ---------------------------------------------------------------------------
+# The naive swing-break baseline lives in its own cohort space
+# ---------------------------------------------------------------------------
+COIN_SET_ALTS = 'alts'  # coins with no Deribit book: the app cohort `no_options_book`
+COIN_SET_COVERED = 'covered'  # BTC / ETH: the app cohorts that have an options path
+COIN_SETS = (COIN_SET_ALTS, COIN_SET_COVERED)
+
+
+def coin_set_for_path(options_path: str) -> str:
+    """Which baseline coin set an app cohort is compared with."""
+    return COIN_SET_ALTS if options_path == PATH_NO_BOOK else COIN_SET_COVERED
+
+
+def coin_set_for_coin(coin: str) -> str:
+    return COIN_SET_COVERED if coin in C.OPTIONS_CURRENCY_BY_COIN else COIN_SET_ALTS
+
+
+@dataclass(frozen=True, order=True)
+class BaselineKey:
+    """`(source, coin_set, lookback)`: the naive baseline has no options layer, so it has no options path."""
+
+    source: str
+    coin_set: str
+    lookback: str
+
+    def __post_init__(self) -> None:
+        if self.source not in E.SOURCES:
+            raise ValueError(f'unknown source {self.source!r}')
+        if self.coin_set not in COIN_SETS:
+            raise ValueError(f'unknown coin set {self.coin_set!r}')
+        if self.lookback not in (LOOKBACK_THIN, LOOKBACK_FULL):
+            raise ValueError(f'unknown lookback {self.lookback!r}')
+
+    @property
+    def label(self) -> str:
+        return f'{self.source}/{self.coin_set}/{self.lookback}'
+
+
+class BaselineObservation(Observation):
+    """A naive-baseline trade. Same fields and statistics as an app observation; a different cohort space.
+
+    ``options_verdict`` is ``None`` on purpose: the baseline never consulted the options layer.
+    """
+
+    @property
+    def options_path(self) -> str:  # pragma: no cover - a baseline trade has no options path
+        raise ValueError('a naive baseline trade has no options path')
+
+    @property
+    def coin_set(self) -> str:
+        return coin_set_for_coin(self.coin)
+
+    @property
+    def cohort(self) -> BaselineKey:  # type: ignore[override]
+        return BaselineKey(self.source, self.coin_set, self.lookback)
