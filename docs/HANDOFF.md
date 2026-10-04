@@ -1,6 +1,6 @@
 # Handoff — Phase 1 signals loop
 
-Written 2026-10-03, updated 2026-10-04 after M7 code. Spec: [`self-learning-crypto-signals.md`](../../self-learning-crypto-signals.md). Plan: `phase_1_signals_loop_cdbc8e73.plan.md`. Detailed contracts: [`BUILD-LOG.md`](BUILD-LOG.md).
+Written 2026-10-03, updated 2026-10-04 after M8 code. Spec: [`self-learning-crypto-signals.md`](../../self-learning-crypto-signals.md). Plan: `phase_1_signals_loop_cdbc8e73.plan.md`. Detailed contracts: [`BUILD-LOG.md`](BUILD-LOG.md).
 
 ## Goal
 
@@ -19,9 +19,10 @@ Private paper-only crypto signals loop on the Win10 laptop: ingest → features 
 | M5 Options check | done | `2994b6f` |
 | M6 Barrier labeler | done | see `git log` (commit after `2994b6f`) |
 | M7 Replay | done (Tardis threshold check 2 of 12 months) | `8b48f32` .. `fe226ed` + docs |
-| M8–M10 | pending | — |
+| M8 Stats | done (code; owner questions open) | see `git log` (commit after `9c02415`) |
+| M9–M10 | pending | — |
 
-**1351 tests pass.** DB `signals` at Alembic head `d8b2f6a31e05`: replay 2026-09-04 .. 2026-10-04, 15 coins, 129,375 feature rows, 833 candidates, 817 labels (16 awaiting bars); no live candidates yet. `RULE_VERSION = 'phase1-v6'`, `rule_hash = ee25b0d73c1469bef61b85822264d47347adb43a9a090018eb8e151a70605c90`. Live worker restarted 2026-10-04 14:35 UTC after a gap from 2026-10-02 (it had not been running; Deribit snapshots start then).
+**1428 tests pass.** DB `signals` at Alembic head `d8b2f6a31e05`: replay 2026-09-04 .. 2026-10-04, 15 coins, 129,375 feature rows, 833 candidates, 817 labels (16 awaiting bars); no live candidates yet. `RULE_VERSION = 'phase1-v6'`, `rule_hash = ee25b0d73c1469bef61b85822264d47347adb43a9a090018eb8e151a70605c90`. Live worker restarted 2026-10-04 14:35 UTC after a gap from 2026-10-02 (it had not been running; Deribit snapshots start then).
 
 ## Decisions locked
 
@@ -44,9 +45,11 @@ Private paper-only crypto signals loop on the Win10 laptop: ingest → features 
   - Label-only context columns (`cmi_*`, `lead_venue*`, etc.) stay NULL; M8 fills them in a NULL -> value-once enrichment step if its stats need them.
   - Full list in the M6 entry of `BUILD-LOG.md`.
 
+- **M8 stats.** Independent sample = first row of each `sample_group_id`. Every statistic runs inside one cohort `(source, options_path, lookback)`; mixing raises `MixedCohortError`, so `no_options_history` rows never pool with options-layer rows, and signal bars before 2026-09-24 form a separate `thin` lookback cohort. `no_entry` is out of every R statistic; ambiguous and `funding_partial` shares are reported. Every cell carries raw and independent counts and an `insufficient_sample` flag below 30 independent. Report: `python -m app.worker.stats_job [--source] [--json] [--out]`, read-only. Full list in the M8 entry of `BUILD-LOG.md`.
+
 ## Open
 
-Independent sample = group first row vs mean (M8). M3.1 Ambiguity 1: the state is measured against the last confirmed swing, so a new swing that forms after the break can end it early. Revisit if replay shows it matters. M6: a symbol Binance has moved to 1h or 4h funding is held to the 8h hole tolerance, so a single missed print there goes undetected; if M8 shows funding matters, read `GET /fapi/v1/fundingInfo` for per-symbol intervals. Labeler and rules jobs are not scheduled yet (M10).
+M8 owner questions (details in the M8 entry of `BUILD-LOG.md`): (1) nothing writes `p_upper_before_stop`, so the reliability diagram and Brier are empty — where does the probability come from, and does a timeout count as a miss? (2) the swing-break baseline covers only breaks that became candidates — label every 4h break event instead? (3) should the edge-line pool include shadow rows, and should the walk-up pool horizons? (4) can replay cohorts count toward the kill rule's 300? M3.1 Ambiguity 1: the state is measured against the last confirmed swing, so a new swing that forms after the break can end it early. Revisit if replay shows it matters. M6: a symbol Binance has moved to 1h or 4h funding is held to the 8h hole tolerance, so a single missed print there goes undetected; if M8 shows funding matters, read `GET /fapi/v1/fundingInfo` for per-symbol intervals. Labeler and rules jobs are not scheduled yet (M10).
 
 ## Key files
 
@@ -88,7 +91,8 @@ Subagents don't see the chat. Each brief must name the milestone, point to this 
    - **Replay run done 2026-10-04** over the 30-day backfill (counts in the M7 entry). To label the 16 rows still awaiting bars, or to extend the range, rerun `python -m app.worker.replay --start ... --end ... --label-at ...` (existing rows are skipped).
    - Options history policy stays as decided: no paid Tardis history; BTC/ETH replay rows without a book carry `options_ignored:no_options_history`, and M8 must never pool them with live rows that went through the options layer.
    - **Keep the live worker running** (`python -m app.worker`). Its 5-minute Deribit poll builds options history for free, and every day it is down loses OI for good.
-2. Then M8 stats (carries the M6 requirements: exclude `no_entry`, report ambiguous and `funding_partial` shares; and the M7 ones: keep `no_options_history` rows apart, and weigh the thin-lookback first ~20 days of replay; first look: 61% of replay labels time out) → M9 API/UI → M10 gate.
+2. **M8 owner questions** (see Open). The probability question blocks the Phase 1 reliability criterion; the baseline question blocks a fair kill-rule comparison. First report: 817 replay labels, no live ones; full-lookback alert expectancy on alts -0.039 R [-0.142, +0.064], n=53 independent; the thin-lookback cohort is +0.141 [+0.032, +0.247], n=70; baselines n=18 and 20 (too small); kill rule not yet applicable.
+3. Then M9 API/UI (serve `StatsReport`) → M10 gate.
 
 Local run (from `repo/api`):
 

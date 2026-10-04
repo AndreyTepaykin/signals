@@ -849,3 +849,57 @@ Walks 15m bar closes through the existing feature -> rules -> options -> label j
 - Tardis fixtures 2025-10 and 2025-11 built (BTC 618 / 657 instruments, ETH 703 / 711; about 14 KB each). The streamer's per-line `split(b'\n', 1)` was quadratic in the decompressed buffer (15+ min per month); now one split per chunk.
 - Dry run against `signals` (BTC+ETH, 2026-10-04 10:00-11:00 UTC): 5 bars, 30 feature rows computed and rolled back, no candidates (thin history). `signals` still holds 0 feature rows, 0 candidates, 0 labels.
 - No migration. Alembic head unchanged `d8b2f6a31e05`.
+
+## M8 - Stats engine and report
+
+- Date: 2026-10-04
+- Model: Claude Sonnet 5.5 high (implementer), Claude Opus 5.5 (orchestrator review), Bugbot (no findings)
+
+A pure stats engine over labeled candidates, plus a read-only report job. Every statistic is computed inside one cohort, on independent samples, with an explicit too-small flag. No schema change, no hashed value touched (`rule_hash` still `ee25b0d7...`), no enrichment step (no statistic needs the label-only context columns, so they stay NULL).
+
+### Files created or modified
+- `repo/api/app/core/stats/__init__.py` (new) - package.
+- `repo/api/app/core/stats/params.py` (new) - stats-only parameters (not hashed); floors are read from `constants`, never restated.
+- `repo/api/app/core/stats/observations.py` (new) - `Observation`, `CohortKey`, `classify_options_path`, `classify_lookback`, `split_by_cohort`, `MixedCohortError`.
+- `repo/api/app/core/stats/summary.py` (new) - `collapse_independent`, `summarize` -> `CellSummary`, bootstrap interval, profit factor, drawdown, win rate, Brier, `sample_note`.
+- `repo/api/app/core/stats/reliability.py` (new) - reliability dataset; bins under 20 hidden.
+- `repo/api/app/core/stats/report.py` (new) - `build_report` -> `StatsReport`: alert/shadow populations, horizons, pool walk-up, `no_entry` tables, baselines, kill rule.
+- `repo/api/app/core/stats/render.py` (new) - `format_text`, `to_jsonable`.
+- `repo/api/app/worker/stats_job.py` (new) - `load_observations`, `run_stats`, `readonly_session`, CLI.
+- Tests (new, 77): `stats_helpers.py`, `test_stats_cohorts.py`, `test_stats_summary.py`, `test_stats_report.py`, `test_stats_job.py`.
+
+### Contracts frozen
+- **Cohort** = `CohortKey(source, options_path, lookback)`. `source` in `live|replay`. `options_path` in `no_options_history` (replay, BTC/ETH, verdict `ignore`, and either the marker reason or no `options_snapshot_time`), `no_options_book` (coin has no Deribit book: alts), `options_layer` (real verdict), `options_layer_ignored` (BTC/ETH ignored for a stale/thin book, or live with no snapshot). `lookback` = `thin` when `bar_close < THIN_LOOKBACK_CUTOFF` (2026-09-24 UTC = backfill start + 20 days), else `full`. The options path is read from the candidate's structure, not only `status_reason`: shadow rows (vote conflict, CVD) keep their own reason, and 171 BTC/ETH replay rows would otherwise escape the `no_options_history` cohort.
+- **No pooling across cohorts.** `summarize(observations, cohort)` takes a mandatory cohort and raises `MixedCohortError` on any foreign row. `split_by_cohort` is the only grouping across cohorts. So `no_options_history` rows can never share a statistic with live rows that went through the options layer.
+- **Independent sample = first row of each `sample_group_id`** by `(decision_time, candidate_id)`, in `collapse_independent` (single code path). Why: it is the trade the rules would have taken, it is chosen from decision-time data only, and stored R stays one real trade, so profit factor and drawdown keep their meaning. Selection happens before `no_entry` rows are dropped. Raw counts are printed next to independent counts in every table but never feed a statistic.
+- **`no_entry`** is excluded from every R statistic; count and rate reported raw and independent, overall and per status and horizon.
+- **Label quality:** ambiguous share among filled labels (no_entry excluded), flagged above `AMBIGUOUS_SHARE_FLAG = 0.05`. `funding_partial` share; funding-sensitive figures (`expectancy_r_ex_funding_partial`, `funding_r_mean_complete`) drop those rows.
+- **Sample size:** `insufficient_sample` + `sample_note` on every cell, below `MIN_INDEPENDENT_TO_CONCLUDE = constants.POOL_MIN_INDEPENDENT_OUTCOMES` (30). Reliability bins below `CALIBRATION_BIN_MIN_OUTCOMES` (20) hidden. Kill rule `not_yet_applicable` below `KILL_RULE_INDEPENDENT_LABELS` (300); also `triggered`, `not_triggered`, `baseline_unavailable`.
+- Intervals: seeded percentile bootstrap of the mean (`BOOTSTRAP_RESAMPLES = 4000`, `BOOTSTRAP_SEED = 20261004`), confidence `constants.INTERVAL_CONFIDENCE` (90%).
+- Populations: `alert` vs `shadow` (every other labeled status), never merged; shadow also itemized by status and `status_reason`.
+- Pool walk-up follows `constants.POOL_WALK_UP_LEVELS`; a level whose dimension set equals the previous one is skipped, and a cell identical to its parent is marked. Vol buckets: terciles of the stored 0..1 percentile (`low|mid|high`).
+- Swing-break baseline: candidates with `trigger='swing_break'`, any status, whose barriers the options layer left alone (`stop_price = pre_options_stop_price`, no target cap); options-modified rows are excluded and counted.
+- Only candidates and labels on the current `rule_hash` are read. CLI `python -m app.worker.stats_job [--source live|replay] [--json] [--out PATH]`, run in a DB-level READ ONLY transaction, always rolled back.
+
+### Deferred to a later milestone
+- **Probability for the reliability diagram and Brier (owner).** Nothing writes `candidate.p_upper_before_stop` (NULL on every row), so both are empty and say so. Where the probability comes from is open; also whether a timeout counts as a miss for "upper before stop" (code assumes yes, unexercised).
+- **Swing-break baseline construction (owner).** It covers only 4h breaks that became candidates; breaks the app never wrote (trend-family gate, open signal on the coin, alt residual gate) are missing, and options-modified rows are not re-resolved on pre-options barriers.
+- **Scope questions (owner):** whether the edge-line pool includes shadow rows; the walk-up pools horizons as the spec does, so one move can count as several independent samples across horizons; whether replay cohorts ever count toward the 300 for the kill rule (currently counted per cohort).
+- Ambiguous above 5% -> on-demand Binance 1m klines for those bars (not built; 0% today). Per-symbol funding intervals (`fundingInfo`) only if funding turns out to matter (0 `funding_partial` today).
+- Scheduling the stats job -> M10; API/dashboard over `StatsReport` -> M9.
+
+### Deviations from the plan
+- None.
+
+### Verification
+- `cd repo/api; & '.\.venv\Scripts\python.exe' -m pytest -q` -> **`1428 passed in 225.99s`** (1351 before), run by the orchestrator. Bugbot on the uncommitted diff: no bugs.
+- **Real report on `signals`** (read-only): 817 labeled candidates, all replay, none live. `no_entry`, ambiguous and `funding_partial` all 0%. BTC/ETH never alert in replay (a missing book means `ignore`), so their cohorts hold shadow rows only. Alert expectancy, 90% interval, independent n:
+
+| Cohort | Alerts raw / ind | Shadow raw / ind | Alert E[R] |
+|---|---|---|---|
+| replay / no_options_book / full | 67 / 53 | 39 / 32 | -0.039 [-0.142, +0.064] |
+| replay / no_options_book / thin | 112 / 70 | 187 / 54 | +0.141 [+0.032, +0.247] |
+| replay / no_options_history / full | 0 / 0 | 127 / 14 | - |
+| replay / no_options_history / thin | 0 / 0 | 285 / 20 | - |
+
+  Swing-break baselines have 18 and 20 independent samples: too small to conclude. Kill rule not yet applicable (largest independent n 70 of 300). The only positive interval is in the thin-lookback cohort, which runs on less history than the engine's windows; the full-lookback cohort straddles zero.
