@@ -3,7 +3,9 @@
 For each bar close from ``start`` through ``end`` (inclusive, on the 15m grid):
 
 1. **Features** — :func:`app.worker.feature_job.assemble_feature_rows` with ``source='replay'`` and every feed read
-   gated at ``as_of(bar_close)``. No predicted-funding read (live-only).
+   gated at ``as_of(bar_close)``. Replay loads feeds once per coin via
+   :func:`app.worker.replay_feeds.preload_replay_feeds` (SQL still uses ``as_of(range_end)``) and builds each bar's
+   inputs in memory with the same visibility windows as :func:`app.worker.feature_job.load_inputs`.
 2. **Rules** — :func:`app.worker.rules_job.run_rules_for_bar` with ``source='replay'``, ``decision_time=bar_close``,
    and no feed-health breaches (replay has no honest breach history).
 3. **Options** — :func:`app.worker.options_job.run_options_job` for ``source='replay'`` after each bar.
@@ -11,14 +13,20 @@ For each bar close from ``start`` through ``end`` (inclusive, on the 15m grid):
 After the walk, **labels** — :func:`app.worker.label_job.run_label_job` with ``as_of_time=label_at`` (default
 ``end``), never the wall clock.
 
+Real runs (non-dry) use three phases:
+
+* **Phase A** — feature rows for every (coin, bar), parallel by coin (``--workers N``, default ``min(7, len(coins))``).
+  Each worker owns a DB session, preloads once, commits every ``FEATURE_COMMIT_CHUNK`` bars. Rows are idempotent
+  (existing keys are skipped).
+* **Phase B** — walk bars in time order; rules and options per bar (reference coin first), single process, commit
+  after each bar.
+* **Phase C** — one label pass.
+
 Dry run
 -------
-``dry_run=True`` executes the full walk with real writes to every job (same code path as production) inside a
-single database transaction: no intermediate commits. The session is rolled back at the end, so nothing persists,
-but the :class:`ReplayReport` reflects exactly what a committed run would have produced (including cross-bar priors
-for sample groups and open-signal checks).
-
-Real runs commit after each bar so a long walk can be resumed.
+``dry_run=True`` runs phases A–C in a **single process** with preloading, inside one database transaction: real
+writes, no intermediate commits, rollback at the end. The :class:`ReplayReport` matches what a committed run would
+produce.
 
 Live vs replay
 --------------
@@ -32,7 +40,7 @@ Nothing in this module calls ``utc_now`` or reads the clock for decisions. Calle
 
 CLI
 ---
-``python -m app.worker.replay --coins A,B --start ISO --end ISO [--label-at ISO] [--dry-run]``
+``python -m app.worker.replay --coins A,B --start ISO --end ISO [--label-at ISO] [--workers N] [--dry-run]``
 """
 
 from __future__ import annotations
@@ -41,11 +49,10 @@ import argparse
 import logging
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
-
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import get_settings, parse_symbols
@@ -62,11 +69,13 @@ from app.models import enums as E
 from app.worker import feature_job as FJ
 from app.worker import label_job as LJ
 from app.worker import options_job as OJ
+from app.worker import replay_feeds as RF
 from app.worker import rules_job as RJ
 
 log = logging.getLogger(__name__)
 
 JOB_NAME = 'replay'
+FEATURE_COMMIT_CHUNK = 96
 
 
 @dataclass
@@ -123,6 +132,13 @@ class ReplayReport:
         return ' '.join(parts)
 
 
+@dataclass
+class _CoinFeatureTotals:
+    written: int = 0
+    already_present: int = 0
+    skipped_not_ready: int = 0
+
+
 def iter_bar_closes(start: datetime, end: datetime) -> list[datetime]:
     """Every 15m signal bar close from ``start`` through ``end``, inclusive, UTC."""
     step = timeframe_delta(P.SIGNAL_TIMEFRAME)
@@ -142,6 +158,10 @@ def resolve_coins(coins: Sequence[str] | None) -> list[str]:
     if coins:
         return RJ.order_coins(coins)
     return RJ.order_coins(get_settings().watchlist_symbols)
+
+
+def default_workers(coin_count: int) -> int:
+    return min(7, max(1, coin_count))
 
 
 def validate_replay_args(
@@ -199,7 +219,21 @@ def _accumulate_labels(report: ReplayReport, label_report: LJ.LabelReport) -> No
             report.pending_by_detail[outcome.detail] = report.pending_by_detail.get(outcome.detail, 0) + 1
 
 
-def _one_bar(
+def _accumulate_feature_report(report: ReplayReport, feat: FJ.AssemblyReport) -> None:
+    report.features_written += feat.written
+    report.features_already_present += feat.already_present
+    if feat.skipped_not_ready:
+        report.features_skipped_not_ready += 1
+
+
+def _build_preload_map(session: Session, coin_list: Sequence[str], bars: Sequence[datetime]) -> dict[str, RF.PreloadedCoinFeeds]:
+    if not bars:
+        return {}
+    range_start, range_end = bars[0], bars[-1]
+    return {coin: RF.preload_replay_feeds(session, coin, range_start=range_start, range_end=range_end) for coin in coin_list}
+
+
+def _features_one_bar(
     session: Session,
     report: ReplayReport,
     *,
@@ -207,6 +241,7 @@ def _one_bar(
     coin_list: Sequence[str],
     version: str,
     policy: HistoryPolicy,
+    preload_map: Mapping[str, RF.PreloadedCoinFeeds],
 ) -> None:
     for coin in coin_list:
         feat = FJ.assemble_feature_rows(
@@ -217,11 +252,19 @@ def _one_bar(
             now=bar_close,
             code_version=version,
             policy=policy,
+            preloaded=preload_map.get(coin),
         )
-        report.features_written += feat.written
-        report.features_already_present += feat.already_present
-        if feat.skipped_not_ready:
-            report.features_skipped_not_ready += 1
+        _accumulate_feature_report(report, feat)
+
+
+def _rules_options_one_bar(
+    session: Session,
+    report: ReplayReport,
+    *,
+    bar_close: datetime,
+    coin_list: Sequence[str],
+    version: str,
+) -> None:
     rules = RJ.run_rules_for_bar(
         session,
         coin_list,
@@ -256,7 +299,122 @@ def _run_label_pass(
     _accumulate_labels(report, label_report)
 
 
-def _walk_full(
+def _phase_a_features_session(
+    session: Session,
+    report: ReplayReport,
+    *,
+    bars: Sequence[datetime],
+    coin_list: Sequence[str],
+    version: str,
+    policy: HistoryPolicy,
+    preload_map: Mapping[str, RF.PreloadedCoinFeeds],
+    commit: bool,
+) -> None:
+    for index, bar_close in enumerate(bars):
+        _features_one_bar(
+            session,
+            report,
+            bar_close=bar_close,
+            coin_list=coin_list,
+            version=version,
+            policy=policy,
+            preload_map=preload_map,
+        )
+        if commit and bars and (index + 1) % FEATURE_COMMIT_CHUNK == 0:
+            session.commit()
+    if commit and bars:
+        session.commit()
+
+
+def _phase_a_features_for_coin(
+    session: Session,
+    coin: str,
+    bars: Sequence[datetime],
+    *,
+    version: str,
+    policy: HistoryPolicy,
+    commit: bool,
+) -> _CoinFeatureTotals:
+    totals = _CoinFeatureTotals()
+    if not bars:
+        return totals
+    preloaded = RF.preload_replay_feeds(session, coin, range_start=bars[0], range_end=bars[-1])
+    for index, bar_close in enumerate(bars):
+        feat = FJ.assemble_feature_rows(
+            session,
+            coin,
+            bar_close,
+            source=E.SOURCE_REPLAY,
+            now=bar_close,
+            code_version=version,
+            policy=policy,
+            preloaded=preloaded,
+        )
+        totals.written += feat.written
+        totals.already_present += feat.already_present
+        if feat.skipped_not_ready:
+            totals.skipped_not_ready += 1
+        if commit and (index + 1) % FEATURE_COMMIT_CHUNK == 0:
+            session.commit()
+    if commit:
+        session.commit()
+    return totals
+
+
+def _replay_features_worker(payload: tuple[str, tuple[str, ...], str, tuple[int, float, int]]) -> _CoinFeatureTotals:
+    """Process-pool entry: one coin, all bar closes (ISO strings), code version, history policy."""
+    coin, bars_iso, version, policy_fields = payload
+    bars = [ensure_utc(datetime.fromisoformat(t)) for t in bars_iso]
+    policy = HistoryPolicy(*policy_fields)
+    factory = get_sync_session_factory()
+    with factory() as session:
+        return _phase_a_features_for_coin(
+            session,
+            coin,
+            bars,
+            version=version,
+            policy=policy,
+            commit=True,
+        )
+
+
+def _policy_fields(policy: HistoryPolicy) -> tuple[int, float, int]:
+    return (policy.window_days, policy.min_span_days, policy.min_samples)
+
+
+def _parallel_phase_a(
+    report: ReplayReport,
+    *,
+    bars: Sequence[datetime],
+    coin_list: Sequence[str],
+    version: str,
+    policy: HistoryPolicy,
+    workers: int,
+) -> None:
+    if not bars or not coin_list:
+        return
+    bars_iso = tuple(b.isoformat() for b in bars)
+    pf = _policy_fields(policy)
+    payloads = [(coin, bars_iso, version, pf) for coin in coin_list]
+    if workers <= 1:
+        factory = get_sync_session_factory()
+        with factory() as session:
+            for coin in coin_list:
+                totals = _phase_a_features_for_coin(session, coin, bars, version=version, policy=policy, commit=True)
+                report.features_written += totals.written
+                report.features_already_present += totals.already_present
+                report.features_skipped_not_ready += totals.skipped_not_ready
+        return
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_replay_features_worker, p): p[0] for p in payloads}
+        for future in as_completed(futures):
+            totals = future.result()
+            report.features_written += totals.written
+            report.features_already_present += totals.already_present
+            report.features_skipped_not_ready += totals.skipped_not_ready
+
+
+def _walk_dry_run(
     session: Session,
     report: ReplayReport,
     *,
@@ -264,18 +422,45 @@ def _walk_full(
     coin_list: Sequence[str],
     label: datetime,
     version: str,
-    commit_each_bar: bool,
     policy: HistoryPolicy,
 ) -> None:
-    """Features, rules and options for every bar, then one label pass. Jobs always write."""
+    preload_map = _build_preload_map(session, coin_list, bars)
     for bar_close in bars:
-        _one_bar(session, report, bar_close=bar_close, coin_list=coin_list, version=version, policy=policy)
+        _features_one_bar(
+            session,
+            report,
+            bar_close=bar_close,
+            coin_list=coin_list,
+            version=version,
+            policy=policy,
+            preload_map=preload_map,
+        )
+        _rules_options_one_bar(session, report, bar_close=bar_close, coin_list=coin_list, version=version)
         report.bars_walked += 1
-        if commit_each_bar:
-            session.commit()
     _run_label_pass(session, report, label=label, coin_list=coin_list, version=version)
-    if commit_each_bar:
-        session.commit()
+
+
+def _phase_b_rules_options(
+    session_or_factory: Session | sessionmaker[Session] | Callable[[], Session],
+    report: ReplayReport,
+    *,
+    bars: Sequence[datetime],
+    coin_list: Sequence[str],
+    version: str,
+    passed_session: Session | None,
+) -> None:
+    if passed_session is not None:
+        for bar_close in bars:
+            _rules_options_one_bar(passed_session, report, bar_close=bar_close, coin_list=coin_list, version=version)
+            report.bars_walked += 1
+            passed_session.commit()
+        return
+    factory = session_or_factory if isinstance(session_or_factory, sessionmaker) else session_or_factory
+    for bar_close in bars:
+        with factory() as session:
+            _rules_options_one_bar(session, report, bar_close=bar_close, coin_list=coin_list, version=version)
+            session.commit()
+        report.bars_walked += 1
 
 
 def run_replay(
@@ -288,15 +473,20 @@ def run_replay(
     dry_run: bool = False,
     code_version: str | None = None,
     history_policy: HistoryPolicy | None = None,
+    workers: int | None = None,
 ) -> ReplayReport:
     """Walk ``start``..``end`` and run features, rules, options, then label at ``label_at``.
 
-    Real runs commit after each bar. ``dry_run`` uses one transaction and rolls back at the end.
+    Real runs use phased features (optional process pool), then rules/options per bar, then labels.
+    ``dry_run`` uses one transaction and rolls back at the end (single process, preloaded feeds).
     """
     start, end, label, coin_list = validate_replay_args(start=start, end=end, label_at=label_at, coins=coins)
     bars = iter_bar_closes(start, end)
     version = code_version if code_version is not None else current_code_version()
     policy = history_policy if history_policy is not None else PRODUCTION_POLICY
+    worker_count = workers if workers is not None else default_workers(len(coin_list))
+    if worker_count < 1:
+        raise ValueError('workers must be at least 1')
     report = ReplayReport(start=start, end=end, label_at=label, dry_run=dry_run, rule_hash=current_rule_hash())
     t0 = time.perf_counter()
 
@@ -305,14 +495,13 @@ def run_replay(
     if dry_run and passed_session is not None:
         nested = passed_session.begin_nested()
         try:
-            _walk_full(
+            _walk_dry_run(
                 passed_session,
                 report,
                 bars=bars,
                 coin_list=coin_list,
                 label=label,
                 version=version,
-                commit_each_bar=False,
                 policy=policy,
             )
         finally:
@@ -320,21 +509,47 @@ def run_replay(
     elif dry_run:
         factory = session_or_factory if isinstance(session_or_factory, sessionmaker) else session_or_factory
         with factory() as session:
-            _walk_full(session, report, bars=bars, coin_list=coin_list, label=label, version=version, commit_each_bar=False, policy=policy)
+            _walk_dry_run(session, report, bars=bars, coin_list=coin_list, label=label, version=version, policy=policy)
             session.rollback()
     elif passed_session is not None:
-        _walk_full(passed_session, report, bars=bars, coin_list=coin_list, label=label, version=version, commit_each_bar=True, policy=policy)
-    else:
-        factory = session_or_factory if isinstance(session_or_factory, sessionmaker) else session_or_factory
+        preload_map = _build_preload_map(passed_session, coin_list, bars)
+        _phase_a_features_session(
+            passed_session,
+            report,
+            bars=bars,
+            coin_list=coin_list,
+            version=version,
+            policy=policy,
+            preload_map=preload_map,
+            commit=True,
+        )
         for bar_close in bars:
-            with factory() as session:
-                _one_bar(session, report, bar_close=bar_close, coin_list=coin_list, version=version, policy=policy)
-                session.commit()
+            _rules_options_one_bar(passed_session, report, bar_close=bar_close, coin_list=coin_list, version=version)
             report.bars_walked += 1
-        if bars:
-            with factory() as session:
-                _run_label_pass(session, report, label=label, coin_list=coin_list, version=version)
-                session.commit()
+            passed_session.commit()
+        _run_label_pass(passed_session, report, label=label, coin_list=coin_list, version=version)
+        passed_session.commit()
+    else:
+        _parallel_phase_a(
+            report,
+            bars=bars,
+            coin_list=coin_list,
+            version=version,
+            policy=policy,
+            workers=worker_count,
+        )
+        _phase_b_rules_options(
+            session_or_factory,
+            report,
+            bars=bars,
+            coin_list=coin_list,
+            version=version,
+            passed_session=None,
+        )
+        factory = session_or_factory if isinstance(session_or_factory, sessionmaker) else session_or_factory
+        with factory() as session:
+            _run_label_pass(session, report, label=label, coin_list=coin_list, version=version)
+            session.commit()
 
     report.elapsed_seconds = time.perf_counter() - t0
     return report
@@ -351,6 +566,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument('--start', required=True, help='first bar close, ISO-8601 UTC')
     parser.add_argument('--end', required=True, help='last bar close, ISO-8601 UTC')
     parser.add_argument('--label-at', help='label as_of instant (default: end)')
+    parser.add_argument(
+        '--workers',
+        type=int,
+        default=None,
+        help='feature phase process pool size (default min(7, coins); ignored for --dry-run)',
+    )
     parser.add_argument('--dry-run', action='store_true', help='run the full pipeline in one transaction, then roll back')
     args = parser.parse_args(argv)
     coins = parse_symbols(args.coins) if args.coins else None
@@ -371,6 +592,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         end=end,
         label_at=label_at,
         dry_run=args.dry_run,
+        workers=args.workers,
     )
     print(report.format_summary())
     return 0

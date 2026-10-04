@@ -47,7 +47,10 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from app.worker.replay_feeds import PreloadedCoinFeeds
 
 from sqlalchemy import null as sa_null
 from sqlalchemy import select as sa_select
@@ -305,12 +308,17 @@ def assemble_feature_rows(
     code_version: str | None = None,
     policy: HistoryPolicy = PRODUCTION_POLICY,
     require_ready: bool | None = None,
+    preloaded: PreloadedCoinFeeds | None = None,
 ) -> AssemblyReport:
     """Compute and store the feature rows (one per horizon) for ``coin`` at ``bar_close``.
 
     Raises :class:`InputsNotReady` (before writing anything) when running live,
     the bars that must exist are absent, and ``READINESS_GRACE`` has not passed.
     ``require_ready`` defaults to True for ``live`` and False for ``replay``.
+
+    When ``preloaded`` is set (replay only), inputs come from
+    :func:`app.worker.replay_feeds.feature_inputs_from_preloaded` instead of
+    :func:`load_inputs`; the live path is unchanged when it is omitted.
     """
     bar_close = ensure_utc(bar_close)
     clock = ensure_utc(now) if now is not None else utc_now()
@@ -323,7 +331,12 @@ def assemble_feature_rows(
     horizon_list = list(horizons)
     for horizon in horizon_list:
         if not inputs_by_horizon:
-            inputs = load_inputs(session, coin, bar_close, horizon, source, observed_at=observed_at)
+            if preloaded is not None:
+                from app.worker.replay_feeds import feature_inputs_from_preloaded
+
+                inputs = feature_inputs_from_preloaded(preloaded, bar_close, horizon, source)
+            else:
+                inputs = load_inputs(session, coin, bar_close, horizon, source, observed_at=observed_at)
         else:
             inputs = replace(next(iter(inputs_by_horizon.values())), horizon=horizon)
         inputs_by_horizon[horizon] = inputs

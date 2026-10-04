@@ -21,7 +21,7 @@ Private paper-only crypto signals loop on the Win10 laptop: ingest → features 
 | M7 Replay | code done; threshold check + real run pending | `8b48f32` + docs commit |
 | M8–M10 | pending | — |
 
-**1344 tests pass, 2 skipped** (Tardis fixture tests, no fixtures yet). DB `signals` at Alembic head `d8b2f6a31e05` (0 feature rows, 0 candidates, 0 labels). `RULE_VERSION = 'phase1-v6'`, `rule_hash = ee25b0d73c1469bef61b85822264d47347adb43a9a090018eb8e151a70605c90`. Live worker restarted 2026-10-04 14:35 UTC after a gap from 2026-10-02 (it had not been running; Deribit snapshots start then).
+**1350 tests pass.** DB `signals` at Alembic head `d8b2f6a31e05` (0 feature rows, 0 candidates, 0 labels). `RULE_VERSION = 'phase1-v6'`, `rule_hash = ee25b0d73c1469bef61b85822264d47347adb43a9a090018eb8e151a70605c90`. Live worker restarted 2026-10-04 14:35 UTC after a gap from 2026-10-02 (it had not been running; Deribit snapshots start then).
 
 ## Decisions locked
 
@@ -85,7 +85,7 @@ Subagents don't see the chat. Each brief must name the milestone, point to this 
 1. **Finish M7** (see the M7 entry in `BUILD-LOG.md`; the harness and the `no_options_history` marker are committed):
    - **Tardis fixtures.** Tardis hit its free data-transfer cap on 2026-10-04 (HTTP 429, code 277, retry after about 24h). After it resets, from `repo/api`: `& '.\.venv\Scripts\python.exe' scripts\tardis_options_fixtures.py --timeout 1200`, then `... --report`. Months already built are skipped, so rerun daily until all 12 exist (2025-10 and 2025-11 done, `652d711`; the cap allows about two months per day per IP). Do not probe the endpoint by hand: every probe counts against the cap.
    - **Threshold decision (owner).** From the report: do the OI floors (BTC 100k / ETH 400k) and the 5% large-expiry share behave sensibly on real books? Any change moves `rule_hash`; settle it before replay writes rows.
-   - **Real replay run.** Backfill 30 days (`python -m app.worker.backfill --days 30`, OI history is only about 30 days deep), `--dry-run` a day first, then `python -m app.worker.replay --start ... --end ...`. Expect hours for 15 coins x 30 days.
+   - **Real replay run.** 30-day backfill done 2026-10-04 (2026-09-04 .. 2026-10-04, 15 coins, no gaps; OI history is only about 30 days deep). A 3-coin one-day dry run works (see the M7 performance pass). Then `python -m app.worker.replay --start ... --end ...`. Expect about 1.5 h for 15 coins x 30 days with the default `--workers` (7).
    - Options history policy stays as decided: no paid Tardis history; BTC/ETH replay rows without a book carry `options_ignored:no_options_history`, and M8 must never pool them with live rows that went through the options layer.
    - **Keep the live worker running** (`python -m app.worker`). Its 5-minute Deribit poll builds options history for free, and every day it is down loses OI for good.
 2. Then M8 stats (carries the M6 requirements: exclude `no_entry`, report ambiguous and `funding_partial` shares; and the M7 one: keep `no_options_history` rows apart) → M9 API/UI → M10 gate.

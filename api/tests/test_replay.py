@@ -22,7 +22,10 @@ from app.models.labels import Label
 from app.worker import feature_job as FJ
 from app.worker import label_job as LJ
 from app.worker import options_job as OJ
+from app.core.db_sync import get_sync_session_factory
+from app.core.features.assemble import compute_features
 from app.worker import replay as RP
+from app.worker import replay_feeds as RF
 from app.worker import rules_job as RJ
 from tests.rules_helpers import T0, add_feature_rows
 from tests.test_feature_job import BAR_CLOSE, POLICY, store_market, stored_mapping
@@ -471,6 +474,118 @@ def test_replay_resume_matches_one_uninterrupted_run(session):
     RP.run_replay(session, coins=['BTCUSDT'], start=T0, end=T0, label_at=t1)
     RP.run_replay(session, coins=['BTCUSDT'], start=t1, end=t1, label_at=t1)
     assert snapshot() == expected
+
+
+# ---------------------------------------------------------------------------
+# Preloaded feeds (replay performance path)
+# ---------------------------------------------------------------------------
+def test_preloaded_inputs_match_load_inputs_across_bars(session):
+    end = BAR_CLOSE
+    start = end - 4 * M15
+    store_market(session, synthetic_inputs(days=4, end=end))
+    late_avail = BAR_CLOSE + timedelta(hours=1)
+    session.execute(
+        insert(OpenInterest),
+        [
+            dict(
+                coin='BTCUSDT',
+                timeframe='1h',
+                poll_time=BAR_CLOSE - timedelta(minutes=1),
+                open_interest_base=Decimal('888888'),
+                available_at=late_avail,
+            )
+        ],
+    )
+    session.flush()
+    bars = RP.iter_bar_closes(start, end)
+    preloaded = RF.preload_replay_feeds(session, 'BTCUSDT', range_start=start, range_end=end)
+    for bar in bars:
+        for horizon in C.HORIZONS:
+            db_inputs = FJ.load_inputs(session, 'BTCUSDT', bar, horizon, E.SOURCE_REPLAY)
+            pl_inputs = RF.feature_inputs_from_preloaded(preloaded, bar, horizon, E.SOURCE_REPLAY)
+            assert RF.inputs_equal(db_inputs, pl_inputs), bar.isoformat()
+            db_comp = compute_features(db_inputs, POLICY)
+            pl_comp = compute_features(pl_inputs, POLICY)
+            assert db_comp.feature_hash == pl_comp.feature_hash
+            assert db_comp.values == pl_comp.values
+
+
+def test_assemble_with_preloaded_matches_db_path(session):
+    store_market(session, synthetic_inputs(days=4, end=BAR_CLOSE))
+    bar = BAR_CLOSE
+    preloaded = RF.preload_replay_feeds(session, 'BTCUSDT', range_start=bar - 3 * M15, range_end=bar)
+    db_report = FJ.assemble_feature_rows(
+        session, 'BTCUSDT', bar, source=E.SOURCE_REPLAY, now=bar, policy=POLICY, code_version='pl01'
+    )
+    session.execute(delete(FeatureRow).where(FeatureRow.source == E.SOURCE_REPLAY, FeatureRow.bar_close == bar))
+    session.flush()
+    pl_report = FJ.assemble_feature_rows(
+        session,
+        'BTCUSDT',
+        bar,
+        source=E.SOURCE_REPLAY,
+        now=bar,
+        policy=POLICY,
+        code_version='pl01',
+        preloaded=preloaded,
+    )
+    assert db_report.written == pl_report.written == len(C.HORIZONS)
+    rows = session.execute(select(FeatureRow).where(FeatureRow.source == E.SOURCE_REPLAY, FeatureRow.bar_close == bar)).scalars().all()
+    assert len(rows) == len(C.HORIZONS)
+
+
+def test_replay_workers_two_match_workers_one_feature_hashes(session):
+    store_market(session, synthetic_inputs(days=4, end=BAR_CLOSE))
+    session.commit()
+    start = BAR_CLOSE - 2 * M15
+    end = BAR_CLOSE
+    label_at = end + timedelta(days=1)
+    factory = get_sync_session_factory()
+    code = 'wkrtest1'
+    RP.run_replay(
+        factory,
+        coins=['BTCUSDT', 'ETHUSDT'],
+        start=start,
+        end=end,
+        label_at=label_at,
+        workers=1,
+        history_policy=POLICY,
+        code_version=code,
+    )
+    with factory() as s:
+        rows_one = s.execute(
+            select(FeatureRow.coin, FeatureRow.bar_close, FeatureRow.horizon, FeatureRow.feature_hash).where(
+                FeatureRow.source == E.SOURCE_REPLAY, FeatureRow.code_version == code
+            )
+        ).all()
+        s.execute(delete(FeatureRow).where(FeatureRow.source == E.SOURCE_REPLAY, FeatureRow.code_version == code))
+        s.execute(delete(Candidate).where(Candidate.source == E.SOURCE_REPLAY))
+        s.execute(delete(Label))
+        s.commit()
+    RP.run_replay(
+        factory,
+        coins=['BTCUSDT', 'ETHUSDT'],
+        start=start,
+        end=end,
+        label_at=label_at,
+        workers=2,
+        history_policy=POLICY,
+        code_version=code,
+    )
+    with factory() as s:
+        rows_two = s.execute(
+            select(FeatureRow.coin, FeatureRow.bar_close, FeatureRow.horizon, FeatureRow.feature_hash).where(
+                FeatureRow.source == E.SOURCE_REPLAY, FeatureRow.code_version == code
+            )
+        ).all()
+    assert sorted(rows_one) == sorted(rows_two)
+
+
+def test_replay_feeds_bulk_reads_use_as_of():
+    from tests.test_feature_job import _bypasses
+
+    path = Path(RF.__file__)
+    assert _bypasses(path.read_text(encoding='utf-8')) == []
 
 
 # ---------------------------------------------------------------------------

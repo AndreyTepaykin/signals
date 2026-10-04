@@ -822,7 +822,16 @@ Walks 15m bar closes through the existing feature -> rules -> options -> label j
 ### Deferred to a later milestone
 - **Threshold check against history (blocking the real replay run).** Tardis answered HTTP 429 `code 277` "This account has reached its data transfer limit" (`retryAfterSeconds` about 85,000) after the probe downloads, so no fixture was built and the OI-floor / 5% large-expiry table does not exist yet. Rerun `scripts/tardis_options_fixtures.py --timeout 1200` then `--report` once the cap resets; it may take several days if one 15-minute window per month is large. Any threshold change moves `rule_hash`.
 - **Real replay run** over backfilled history: needs a 30-day backfill first (OI history is about 30 days deep) and the threshold decision.
-- Speed: dry run measured about 0.7 bars/s for 2 coins (first, slower, run about 0.18 bars/s for 15). A 30-day x 15-coin run may take hours; acceptable once, revisit if M8 needs reruns.
+- Speed (resolved in the same milestone, below): the first harness spent about 5 s per coin-bar (half re-reading about 10k ORM rows through `as_of(bar_close)`, half `realized_vol_samples`), about 60 h for 15 coins x 30 days.
+- Not done: memoizing `yang_zhang_vol` across bars (no bit-identical proof); revisit if reruns get frequent.
+
+### Performance pass (same day)
+- `repo/api/app/worker/replay_feeds.py` (new): `preload_replay_feeds` reads each coin's candles, OI, funding, force orders and calendar once through `as_of(range_end)` (plus BTC perp 15m for alts); `feature_inputs_from_preloaded(preloaded, bar_close, horizon, source)` applies the same windows and `available_at <= bar_close` cut as `load_inputs` (no predicted funding, as before); `inputs_equal` = dataclass equality.
+- `feature_job.assemble_feature_rows(..., preloaded=None)`: optional; the live path is unchanged when omitted.
+- `run_replay(..., workers=None)` / CLI `--workers N` (default `min(7, coins)`). Real runs are phased: **A** features by coin in a process pool (each worker its own session, commit every 96 bars, ON CONFLICT idempotent; alts read BTC feeds, not BTC feature rows); **B** bars in order, rules (reference coin first) + options, commit per bar; **C** labels once at `label_at`. Dry run stays single-process with preloading, one rolled-back transaction.
+- Tests: preloaded inputs equal DB-read inputs on every bar of a range (incl. late-published OI), feature parity through `assemble_feature_rows`, `--workers 1` vs 2 identical feature hashes, gated-read scan of `replay_feeds`.
+- Measured on `signals` (rolled back): ETH 97 bars, preload 1.5 s, features 84 s (0.87 s per coin-bar, was 5 s). Estimate 15 coins x 2880 bars with 7 workers about 1.5 h.
+- **First real-data dry run** (BTC, ETH, SOL; 2026-10-02, 96 bars, label_at 2026-10-04 14:00; 263 s): 864 feature rows, 63 candidates all `watch` before options (45 pending, 18 `vote_conflict`); options `ignore` x 63 (60 `no_options_history`, 3 `no_options_book`); labels 54 labeled, 9 `awaiting_bars`, 0 `no_entry`, 0 errors.
 
 ### Deviations from the plan
 - The harness labels once at `label_at` after the walk instead of per bar; same result, because the labeler reads only through `as_of(label_at)`.
@@ -834,6 +843,7 @@ Walks 15m bar closes through the existing feature -> rules -> options -> label j
 3. The synthetic test market never fires a trigger, so the raw-feed `run_replay` test covers feature assembly and live/replay feature parity only; candidates, options and labels are covered from seeded feature rows (label parity on stop, target and vertical).
 
 ### Verification
-- `cd repo/api; & '.\.venv\Scripts\python.exe' -m pytest -q` -> **`1344 passed, 2 skipped in 291.90s`** (1326 before; skips are the two Tardis fixture tests), run by the orchestrator.
+- `cd repo/api; & '.\.venv\Scripts\python.exe' -m pytest -q` -> **`1344 passed, 2 skipped in 291.90s`** (1326 before; skips are the two Tardis fixture tests), run by the orchestrator. After the performance pass and the 2025-10 / 2025-11 Tardis fixtures: **`1350 passed in 233.61s`**, no skips.
+- Tardis fixtures 2025-10 and 2025-11 built (BTC 618 / 657 instruments, ETH 703 / 711; about 14 KB each). The streamer's per-line `split(b'\n', 1)` was quadratic in the decompressed buffer (15+ min per month); now one split per chunk.
 - Dry run against `signals` (BTC+ETH, 2026-10-04 10:00-11:00 UTC): 5 bars, 30 feature rows computed and rolled back, no candidates (thin history). `signals` still holds 0 feature rows, 0 candidates, 0 labels.
 - No migration. Alembic head unchanged `d8b2f6a31e05`.
