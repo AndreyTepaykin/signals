@@ -119,8 +119,8 @@ def _iter_csv_rows(
             past_window = False
             for chunk in response.iter_bytes(256 * 1024):
                 buffer += decompressor.decompress(chunk)
-                while b'\n' in buffer:
-                    line, buffer = buffer.split(b'\n', 1)
+                *lines, buffer = buffer.split(b'\n')
+                for line in lines:
                     if not line:
                         continue
                     text = line.decode('utf-8', errors='replace')
