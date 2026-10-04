@@ -80,7 +80,11 @@ Subagents don't see the chat. Each brief must name the milestone, point to this 
 
 ## Next step
 
-1. Run **M7 — replay** (Composer 2.5 fast subagent, Opus diff review + live/replay parity tests): replay rows use `source='replay'` through the same feature → rules → options → label path and the `as_of` gate. Decide first how BTC/ETH replay rows are handled without Deribit history (today a missing book gives `ignore` and the row stays `watch`, which the labeler still labels). Replay must produce candidates under the current `rule_hash` or the labeler skips them. Read the M4, M5 and M6 entries.
+1. Run **M7 — replay** (Composer 2.5 fast subagent, Opus diff review + live/replay parity tests): replay rows use `source='replay'` through the same feature → rules → options → label path and the `as_of` gate. Replay must produce candidates under the current `rule_hash` or the labeler skips them. Read the M4, M5 and M6 entries. Deribit options history (decided 2026-10-04):
+   - **No paid history for now.** Deribit's API serves only the current book. Full history exists on Tardis.dev (`options_chain`, since 2019) but needs a paid key and a tick-to-snapshot converter. Revisit only if M8 shows options verdicts change outcomes materially.
+   - **BTC/ETH replay rows carry an explicit "no options history" marker.** They still get `ignore`, stay `watch` and are labeled, so replay measures the rules alone. M8 must never pool them with live rows that went through the options layer.
+   - **Free monthly fixtures, done first in M7.** A small script downloads about 12 of Tardis's free first-of-month files (`https://datasets.tardis.dev/v1/deribit/options_chain/YYYY/MM/01/OPTIONS.csv.gz`, no key). It converts one snapshot per file into the existing `parse_book_summary` / snapshot shape and stores them as test fixtures. Use them to (a) run the M5 metrics and `check_options` over real calm and volatile books, and (b) check the invented thresholds (OI floors BTC 100k / ETH 400k, large expiry >= 5% of OI) against history. Any threshold change moves `rule_hash`, so settle it before replay writes rows.
+   - **Keep the live worker running.** Its 5-minute Deribit poll builds options history for free from now on.
 2. Then M8 stats (carries the M6 requirements: exclude `no_entry`, report ambiguous and `funding_partial` shares) → M9 API/UI → M10 gate.
 
 Local run (from `repo/api`):
