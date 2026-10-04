@@ -1,6 +1,6 @@
 # Handoff — Phase 1 signals loop
 
-Written 2026-10-03, updated 2026-10-04 after M6. Spec: [`self-learning-crypto-signals.md`](../../self-learning-crypto-signals.md). Plan: `phase_1_signals_loop_cdbc8e73.plan.md`. Detailed contracts: [`BUILD-LOG.md`](BUILD-LOG.md).
+Written 2026-10-03, updated 2026-10-04 after M7 code. Spec: [`self-learning-crypto-signals.md`](../../self-learning-crypto-signals.md). Plan: `phase_1_signals_loop_cdbc8e73.plan.md`. Detailed contracts: [`BUILD-LOG.md`](BUILD-LOG.md).
 
 ## Goal
 
@@ -18,9 +18,10 @@ Private paper-only crypto signals loop on the Win10 laptop: ingest → features 
 | M4 Frozen rules | done | `3ba592a` |
 | M5 Options check | done | `2994b6f` |
 | M6 Barrier labeler | done | see `git log` (commit after `2994b6f`) |
-| M7–M10 | pending | — |
+| M7 Replay | code done; threshold check + real run pending | `8b48f32` + docs commit |
+| M8–M10 | pending | — |
 
-Working tree clean. **1326 tests pass.** DB `signals` at Alembic head `d8b2f6a31e05` (0 candidates, 0 labels). `RULE_VERSION = 'phase1-v5'`, `rule_hash = dd943a83c5966117ea8d58089f4c378a1ec2506239c91c108938276d4b31ba8c`.
+**1344 tests pass, 2 skipped** (Tardis fixture tests, no fixtures yet). DB `signals` at Alembic head `d8b2f6a31e05` (0 feature rows, 0 candidates, 0 labels). `RULE_VERSION = 'phase1-v6'`, `rule_hash = ee25b0d73c1469bef61b85822264d47347adb43a9a090018eb8e151a70605c90`. Live worker restarted 2026-10-04 14:35 UTC after a gap from 2026-10-02 (it had not been running; Deribit snapshots start then).
 
 ## Decisions locked
 
@@ -56,7 +57,8 @@ Independent sample = group first row vs mean (M8). M3.1 Ambiguity 1: the state i
 | `api/app/core/hashing.py` | `feature_hash`, `rule_hash` (constants + engine params), `code_version` |
 | `api/app/models/as_of.py` | Available-at read gate |
 | `api/app/models/*.py` | 13 tables; no order/position tables |
-| `api/app/worker/` | Ingest, backfill, `feature_job` |
+| `api/app/worker/` | Ingest, backfill, `feature_job`, `rules_job`, `options_job`, `label_job`, `replay` |
+| `api/scripts/tardis_options_fixtures.py` | Dev tool: historical Deribit books from Tardis free files |
 | `api/alembic/` | Schema migrations |
 | `docs/BUILD-LOG.md` | Per-milestone contracts |
 
@@ -80,12 +82,13 @@ Subagents don't see the chat. Each brief must name the milestone, point to this 
 
 ## Next step
 
-1. Run **M7 — replay** (Composer 2.5 fast subagent, Opus diff review + live/replay parity tests): replay rows use `source='replay'` through the same feature → rules → options → label path and the `as_of` gate. Replay must produce candidates under the current `rule_hash` or the labeler skips them. Read the M4, M5 and M6 entries. Deribit options history (decided 2026-10-04):
-   - **No paid history for now.** Deribit's API serves only the current book. Full history exists on Tardis.dev (`options_chain`, since 2019) but needs a paid key and a tick-to-snapshot converter. Revisit only if M8 shows options verdicts change outcomes materially.
-   - **BTC/ETH replay rows carry an explicit "no options history" marker.** They still get `ignore`, stay `watch` and are labeled, so replay measures the rules alone. M8 must never pool them with live rows that went through the options layer.
-   - **Free monthly fixtures, done first in M7.** A small script downloads about 12 of Tardis's free first-of-month files (`https://datasets.tardis.dev/v1/deribit/options_chain/YYYY/MM/01/OPTIONS.csv.gz`, no key). It converts one snapshot per file into the existing `parse_book_summary` / snapshot shape and stores them as test fixtures. Use them to (a) run the M5 metrics and `check_options` over real calm and volatile books, and (b) check the invented thresholds (OI floors BTC 100k / ETH 400k, large expiry >= 5% of OI) against history. Any threshold change moves `rule_hash`, so settle it before replay writes rows.
-   - **Keep the live worker running.** Its 5-minute Deribit poll builds options history for free from now on.
-2. Then M8 stats (carries the M6 requirements: exclude `no_entry`, report ambiguous and `funding_partial` shares) → M9 API/UI → M10 gate.
+1. **Finish M7** (see the M7 entry in `BUILD-LOG.md`; the harness and the `no_options_history` marker are committed):
+   - **Tardis fixtures.** Tardis hit its free data-transfer cap on 2026-10-04 (HTTP 429, code 277, retry after about 24h). After it resets, from `repo/api`: `& '.\.venv\Scripts\python.exe' scripts\tardis_options_fixtures.py --timeout 1200`, then `... --report`. Months already built are skipped, so rerun daily until all 12 exist. Do not probe the endpoint by hand: every probe counts against the cap.
+   - **Threshold decision (owner).** From the report: do the OI floors (BTC 100k / ETH 400k) and the 5% large-expiry share behave sensibly on real books? Any change moves `rule_hash`; settle it before replay writes rows.
+   - **Real replay run.** Backfill 30 days (`python -m app.worker.backfill --days 30`, OI history is only about 30 days deep), `--dry-run` a day first, then `python -m app.worker.replay --start ... --end ...`. Expect hours for 15 coins x 30 days.
+   - Options history policy stays as decided: no paid Tardis history; BTC/ETH replay rows without a book carry `options_ignored:no_options_history`, and M8 must never pool them with live rows that went through the options layer.
+   - **Keep the live worker running** (`python -m app.worker`). Its 5-minute Deribit poll builds options history for free, and every day it is down loses OI for good.
+2. Then M8 stats (carries the M6 requirements: exclude `no_entry`, report ambiguous and `funding_partial` shares; and the M7 one: keep `no_options_history` rows apart) → M9 API/UI → M10 gate.
 
 Local run (from `repo/api`):
 

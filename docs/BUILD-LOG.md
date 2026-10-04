@@ -793,3 +793,47 @@ Freezes `entry_price`, `one_r`, both barrier prices and `vertical_deadline` once
 - `cd repo/api; & '.\.venv\Scripts\python.exe' -m pytest -q` -> **`1326 passed in 210.49s (0:03:30)`** (1271 before; +55).
 - Migration `d8b2f6a31e05` re-applied after the in-place edit: stamped back to `c52e9b8a4f17`, `upgrade head`, `downgrade -1`, `upgrade head`; `alembic current` = `d8b2f6a31e05 (head)`.
 - `python -m app.worker.label_job --dry-run` against `signals`: `labeled=0 no_entry=0 funding_partial=0 pending=0 stale_rule_hash=0 errors=0` (no candidates exist yet).
+
+
+## M7 - Replay harness (code done; threshold check and real replay run pending)
+
+- Date: 2026-10-04
+- Model: Composer 2.5 fast (two implementers: replay harness; Tardis fixtures), Claude Opus 5.5 (orchestrator diff review, one rework round)
+
+Walks 15m bar closes through the existing feature -> rules -> options -> label jobs with `source='replay'`, every feed read through `as_of(bar_close)`. Adds an explicit marker for replay BTC/ETH rows that had no Deribit book. A dev script builds historical Deribit books from Tardis free first-of-month files for the M5 threshold check; the fixtures themselves are not built yet (Tardis transfer cap, below).
+
+### Files created or modified
+- `repo/api/app/worker/replay.py` (new) - `run_replay`, `ReplayReport`, CLI.
+- `repo/api/app/core/constants.py` - `RULE_VERSION = 'phase1-v6'`, `OPTIONS_IGNORE_NO_HISTORY`.
+- `repo/api/app/core/options/check.py` - required `CheckInputs.source`; replay with no book -> `no_options_history`.
+- `repo/api/app/worker/options_job.py` - passes `candidate.source`; replay docstring.
+- `repo/api/scripts/tardis_options_fixtures.py` (new, dev tool outside `app/`) - streams `datasets.tardis.dev/v1/deribit/options_chain/YYYY/MM/01/OPTIONS.csv.gz`, keeps the latest row per BTC/ETH instrument in 00:00-00:15 UTC, writes `tests/fixtures/tardis/deribit_book_summary_{btc|eth}_YYYYMM01.json.gz` in the live `get_book_summary_by_currency` shape (OI > 0 only). `--months`, `--coins`, `--timeout`, `--force` (months with both files present are skipped by default), `--report` (threshold table from stored fixtures).
+- Tests: `test_replay.py` (new), `test_options_history_fixtures.py` (new; skips while the fixture dir is empty), `test_options_check.py` (marker cases), pins moved in `test_hashing.py`, `test_rules_constants.py`, `test_label_rule_hash.py`, `test_options_constants.py`.
+- `rule_hash` **moved**: `phase1-v5` / `dd943a83...` -> `phase1-v6` / `ee25b0d73c1469bef61b85822264d47347adb43a9a090018eb8e151a70605c90`. No candidate or label rows existed.
+
+### Contracts frozen
+- `app.worker.replay.run_replay(session_or_factory, *, coins, start, end, label_at=None, dry_run=False, ...) -> ReplayReport`. Per bar (inclusive 15m grid, reference coin first): `assemble_feature_rows(source='replay', now=bar_close)`, `run_rules_for_bar(source='replay', decision_time=bar_close, feed_breaches={})`, `run_options_job(source='replay')`. After the walk: `run_label_job(as_of_time=label_at)`, `label_at` defaults to `end` and may not precede it. No wall-clock read (AST guard test).
+- **Commits:** a real run commits after each bar (resumable; a rerun of a finished range writes nothing). **Dry run** executes every job with real writes in one transaction and rolls back at the end, so its report equals a real run's, cross-bar priors included.
+- CLI `python -m app.worker.replay --coins A,B (default WATCHLIST) --start ISO --end ISO [--label-at ISO] [--dry-run]`; exits 2 on end < start, label_at < end, or a coin not on the watchlist.
+- `ReplayReport`: `bars_walked`, `features_written / features_already_present / features_skipped_not_ready`, `candidates_by_status`, `candidates_by_status_reason`, `options_checked`, `options_verdicts`, `options_ignore_reasons`, `labeled`, `no_entry`, `funding_partial`, `pending`, `pending_by_detail`, `stale_rule_hash`, `label_errors`, `elapsed_seconds`, `bars_per_second`, `format_summary()`.
+- **No-options-history marker:** `OPTIONS_IGNORE_NO_HISTORY = 'no_options_history'`, reason `options_ignored:no_options_history`. Written instead of `no_snapshot` when `source='replay'`, the coin is covered (BTC, ETH) and no book is visible at `decision_time`. Verdict stays `ignore`, status `watch`, the row is labeled. A replay row that sees a stored snapshot goes through the options layer like live; a stale one is `snapshot_stale`. **M8 requirement:** never pool `no_options_history` rows with live rows that went through the options layer.
+- `CheckInputs.source` is a required field.
+
+### Deferred to a later milestone
+- **Threshold check against history (blocking the real replay run).** Tardis answered HTTP 429 `code 277` "This account has reached its data transfer limit" (`retryAfterSeconds` about 85,000) after the probe downloads, so no fixture was built and the OI-floor / 5% large-expiry table does not exist yet. Rerun `scripts/tardis_options_fixtures.py --timeout 1200` then `--report` once the cap resets; it may take several days if one 15-minute window per month is large. Any threshold change moves `rule_hash`.
+- **Real replay run** over backfilled history: needs a 30-day backfill first (OI history is about 30 days deep) and the threshold decision.
+- Speed: dry run measured about 0.7 bars/s for 2 coins (first, slower, run about 0.18 bars/s for 15). A 30-day x 15-coin run may take hours; acceptable once, revisit if M8 needs reruns.
+
+### Deviations from the plan
+- The harness labels once at `label_at` after the walk instead of per bar; same result, because the labeler reads only through `as_of(label_at)`.
+- Orchestrator review sent back: dry run had skipped feature writes (so it could never show a candidate), and the label-parity, raw-feed, gate-faithful lookahead and strict idempotency tests were missing. All fixed; the `feature_job` dry-run parameter added in the first pass was reverted.
+
+### Ambiguities (choices made)
+1. Marker scope: only "no visible book" on a covered coin in replay. Every other ignore code is shared by live and replay.
+2. Tardis units (checked on a partial 2025-10-01 stream): `timestamp` in microseconds (-> `creation_timestamp` ms), `mark_iv`/`bid_iv`/`ask_iv` in percent, `mark_price` in coin units, OI in coin units, same as the live Deribit response. `estimated_delivery_price` = median `underlying_price` over rows whose `underlying_index` is `index_price`, else over all rows.
+3. The synthetic test market never fires a trigger, so the raw-feed `run_replay` test covers feature assembly and live/replay feature parity only; candidates, options and labels are covered from seeded feature rows (label parity on stop, target and vertical).
+
+### Verification
+- `cd repo/api; & '.\.venv\Scripts\python.exe' -m pytest -q` -> **`1344 passed, 2 skipped in 291.90s`** (1326 before; skips are the two Tardis fixture tests), run by the orchestrator.
+- Dry run against `signals` (BTC+ETH, 2026-10-04 10:00-11:00 UTC): 5 bars, 30 feature rows computed and rolled back, no candidates (thin history). `signals` still holds 0 feature rows, 0 candidates, 0 labels.
+- No migration. Alembic head unchanged `d8b2f6a31e05`.
