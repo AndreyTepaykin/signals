@@ -18,10 +18,10 @@ Private paper-only crypto signals loop on the Win10 laptop: ingest → features 
 | M4 Frozen rules | done | `3ba592a` |
 | M5 Options check | done | `2994b6f` |
 | M6 Barrier labeler | done | see `git log` (commit after `2994b6f`) |
-| M7 Replay | code done; threshold check + real run pending | `8b48f32` + docs commit |
+| M7 Replay | done (Tardis threshold check 2 of 12 months) | `8b48f32` .. `fe226ed` + docs |
 | M8–M10 | pending | — |
 
-**1350 tests pass.** DB `signals` at Alembic head `d8b2f6a31e05` (0 feature rows, 0 candidates, 0 labels). `RULE_VERSION = 'phase1-v6'`, `rule_hash = ee25b0d73c1469bef61b85822264d47347adb43a9a090018eb8e151a70605c90`. Live worker restarted 2026-10-04 14:35 UTC after a gap from 2026-10-02 (it had not been running; Deribit snapshots start then).
+**1351 tests pass.** DB `signals` at Alembic head `d8b2f6a31e05`: replay 2026-09-04 .. 2026-10-04, 15 coins, 129,375 feature rows, 833 candidates, 817 labels (16 awaiting bars); no live candidates yet. `RULE_VERSION = 'phase1-v6'`, `rule_hash = ee25b0d73c1469bef61b85822264d47347adb43a9a090018eb8e151a70605c90`. Live worker restarted 2026-10-04 14:35 UTC after a gap from 2026-10-02 (it had not been running; Deribit snapshots start then).
 
 ## Decisions locked
 
@@ -82,13 +82,13 @@ Subagents don't see the chat. Each brief must name the milestone, point to this 
 
 ## Next step
 
-1. **Finish M7** (see the M7 entry in `BUILD-LOG.md`; the harness and the `no_options_history` marker are committed):
+1. **M7 loose ends** (see the M7 entry in `BUILD-LOG.md`; harness, marker and the real replay run are done):
    - **Tardis fixtures.** Tardis hit its free data-transfer cap on 2026-10-04 (HTTP 429, code 277, retry after about 24h). After it resets, from `repo/api`: `& '.\.venv\Scripts\python.exe' scripts\tardis_options_fixtures.py --timeout 1200`, then `... --report`. Months already built are skipped, so rerun daily until all 12 exist (2025-10 and 2025-11 done, `652d711`; the cap allows about two months per day per IP). Do not probe the endpoint by hand: every probe counts against the cap.
-   - **Threshold decision (owner).** From the report: do the OI floors (BTC 100k / ETH 400k) and the 5% large-expiry share behave sensibly on real books? Any change moves `rule_hash`; settle it before replay writes rows.
-   - **Real replay run.** 30-day backfill done 2026-10-04 (2026-09-04 .. 2026-10-04, 15 coins, no gaps; OI history is only about 30 days deep). A 3-coin one-day dry run works (see the M7 performance pass). Then `python -m app.worker.replay --start ... --end ...`. Expect about 1.5 h for 15 coins x 30 days with the default `--workers` (7).
+   - **Threshold decision (owner).** From the report: do the OI floors (BTC 100k / ETH 400k) and the 5% large-expiry share behave sensibly on real books? 2 of 12 months so far show no reason to change (floors pass 3-5.6x; large expiry never trips because the expiry nearest the hold end is usually a daily, and first-of-month books rarely sit near a monthly expiry). Any change moves `rule_hash`, and the replay then has to be rerun (about 2 h): the labeler skips rows on an old hash.
+   - **Replay run done 2026-10-04** over the 30-day backfill (counts in the M7 entry). To label the 16 rows still awaiting bars, or to extend the range, rerun `python -m app.worker.replay --start ... --end ... --label-at ...` (existing rows are skipped).
    - Options history policy stays as decided: no paid Tardis history; BTC/ETH replay rows without a book carry `options_ignored:no_options_history`, and M8 must never pool them with live rows that went through the options layer.
    - **Keep the live worker running** (`python -m app.worker`). Its 5-minute Deribit poll builds options history for free, and every day it is down loses OI for good.
-2. Then M8 stats (carries the M6 requirements: exclude `no_entry`, report ambiguous and `funding_partial` shares; and the M7 one: keep `no_options_history` rows apart) → M9 API/UI → M10 gate.
+2. Then M8 stats (carries the M6 requirements: exclude `no_entry`, report ambiguous and `funding_partial` shares; and the M7 ones: keep `no_options_history` rows apart, and weigh the thin-lookback first ~20 days of replay; first look: 61% of replay labels time out) → M9 API/UI → M10 gate.
 
 Local run (from `repo/api`):
 

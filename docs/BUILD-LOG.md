@@ -795,7 +795,7 @@ Freezes `entry_price`, `one_r`, both barrier prices and `vertical_deadline` once
 - `python -m app.worker.label_job --dry-run` against `signals`: `labeled=0 no_entry=0 funding_partial=0 pending=0 stale_rule_hash=0 errors=0` (no candidates exist yet).
 
 
-## M7 - Replay harness (code done; threshold check and real replay run pending)
+## M7 - Replay harness (done; Tardis threshold check 2 of 12 months)
 
 - Date: 2026-10-04
 - Model: Composer 2.5 fast (two implementers: replay harness; Tardis fixtures), Claude Opus 5.5 (orchestrator diff review, one rework round)
@@ -845,6 +845,7 @@ Walks 15m bar closes through the existing feature -> rules -> options -> label j
 
 ### Verification
 - `cd repo/api; & '.\.venv\Scripts\python.exe' -m pytest -q` -> **`1344 passed, 2 skipped in 291.90s`** (1326 before; skips are the two Tardis fixture tests), run by the orchestrator. After the performance pass and the 2025-10 / 2025-11 Tardis fixtures: **`1350 passed in 233.61s`**, no skips.
+- **Real replay run written to `signals`** (owner approved with the current thresholds; rerun if a threshold changes): `--start 2026-09-04T16:15Z --end 2026-10-04T14:45Z --label-at 2026-10-04T16:30Z`, 15 coins, 7 workers, 6518 s. 2875 bars, 129,375 feature rows (45 coin-bars not ready, at the range start: no earlier 1h bar). 833 candidates, all on `ee25b0d7...`: `alert`/`no_options_book` 182, `watch`/`no_options_history` 252, `watch`/`vote_conflict` 319, `cancelled`/`cvd_divergence_against` 80. Labels 817 (upper 155 avg stored R +0.950, lower 162 avg -1.066, vertical 500 avg -0.088), 16 `awaiting_bars`, `no_entry` 0, ambiguous 0, `funding_partial` 0. Raw, not independent, shadow rows included: M8 interprets. The first ~20 days run on less lookback than the engine's windows (backfill starts 2026-09-04).
 - Tardis fixtures 2025-10 and 2025-11 built (BTC 618 / 657 instruments, ETH 703 / 711; about 14 KB each). The streamer's per-line `split(b'\n', 1)` was quadratic in the decompressed buffer (15+ min per month); now one split per chunk.
 - Dry run against `signals` (BTC+ETH, 2026-10-04 10:00-11:00 UTC): 5 bars, 30 feature rows computed and rolled back, no candidates (thin history). `signals` still holds 0 feature rows, 0 candidates, 0 labels.
 - No migration. Alembic head unchanged `d8b2f6a31e05`.
