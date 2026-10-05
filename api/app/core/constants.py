@@ -30,7 +30,7 @@ from types import MappingProxyType
 # ---------------------------------------------------------------------------
 # Rule version (hashed together with the constants below).
 # ---------------------------------------------------------------------------
-RULE_VERSION = 'phase1-v6'
+RULE_VERSION = 'phase1-v7'
 
 # ---------------------------------------------------------------------------
 # Horizons and vertical barriers
@@ -353,6 +353,35 @@ POOL_WALK_UP_LEVELS = (
 # spec order, so nothing is silently merged; the stats engine (M8) may skip a
 # level whose cell is identical to the previous one. The setup family is
 # treated as part of the key at every level (the edge belongs to a family).
+
+# Pooled-estimate arithmetic (M8.1). The abstain rule reads the estimate, so every
+# value that can move it is frozen here; `app.core.stats.params` reads them.
+ESTIMATE_BOOTSTRAP_RESAMPLES = 4000  # percentile bootstrap of the mean
+ESTIMATE_BOOTSTRAP_SEED = 20261004
+ESTIMATE_VOL_BUCKET_EDGES = (1.0 / 3.0, 2.0 / 3.0)  # terciles of the stored 0..1 vol percentile
+ESTIMATE_VOL_BUCKET_NAMES = ('low', 'mid', 'high')
+# Signal bars before this instant ran on less history than the 90-day windows (backfill
+# starts 2026-09-04, + 20 days); their outcomes are never pooled.
+ESTIMATE_THIN_LOOKBACK_CUTOFF_UTC = '2026-09-24T00:00:00+00:00'
+
+# Abstain rule (M10). Spec: "Abstain once a pool exists: if it has at least 30
+# independent outcomes and the lower bound of expected R is below round-trip cost
+# (fees, slippage, and the adverse edge of the funding band), the candidate does
+# not become an alert." Stored R is already net of fees, slippage and realized
+# funding, so the pooled interval is tested against the funding band's adverse
+# edge only (charging the fees twice would double-count them). The band is the
+# horizon carry and its sign flip, so its adverse edge is |carry| for either side,
+# converted to R on the signal-bar close and the post-options 1R. A row with no
+# carry (replay never has one) tests against 0. A pool at the floor without an
+# interval abstains: a point estimate does not authorize a trade.
+ABSTAIN_APPLIES_TO_STATUS = 'alert'
+ABSTAIN_MIN_POOL_INDEPENDENT = POOL_MIN_INDEPENDENT_OUTCOMES
+ABSTAIN_TESTED_BOUND = 'expected_r_ci_low'
+ABSTAIN_COST_EDGE = 'funding_band_adverse_edge'  # fees and slippage are inside stored R
+ABSTAIN_FUNDING_EDGE_NOTIONAL = 'signal_bar_close'
+ABSTAIN_UNKNOWN_FUNDING_EDGE_BPS = Decimal('0')
+ABSTAIN_WITHOUT_INTERVAL = True
+STATUS_REASON_ABSTAIN_EDGE_BELOW_COST = 'abstain:edge_below_cost'  # status `abstained`
 
 # ---------------------------------------------------------------------------
 # Model floors

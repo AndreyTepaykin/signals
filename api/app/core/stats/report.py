@@ -18,9 +18,9 @@ Structure (per cohort; cohorts are never merged, see `observations.py`):
   alone; contaminated by the app's gates, so it is not the comparison).
 * kill rule: BINDS ON LIVE ONLY (alert independent labels vs the live naive baseline, floor 300). Replay full-lookback
   cohorts carry an advisory `kill_rule_preview` whose status can never be `triggered`; thin cohorts get neither.
-* `would_abstain` (alerts): how many alert candidates carry a stored pool of >= 30 independent outcomes whose interval's
-  lower bound is below the round-trip cost in R. The abstain rule itself is NOT implemented (deferred, needs a
-  RULE_VERSION bump); this is only a count.
+* `would_abstain` (alerts): alerts that carry a stored pool of >= 30 independent outcomes whose interval's lower bound is
+  below 0 R. The abstain rule (M10) already turns those into `abstained`, so under the current rule hash this must be 0;
+  abstained rows themselves are a shadow status.
 """
 
 from __future__ import annotations
@@ -234,12 +234,12 @@ def kill_rule_for(
 
 @dataclass(frozen=True)
 class WouldAbstain:
-    """How many alert candidates the (deferred) abstain rule would have stood down on. Informational; no rule is applied.
+    """Alerts whose stored pool fails the abstain test even at a zero funding edge. A consistency check, not a rule.
 
-    A candidate counts when its stored pool has >= 30 independent outcomes and the lower bound of its expected-R interval
-    is below its round-trip cost in R (fees + slippage, 12 bps / one-R-fraction, stored on the label as `fees_r`). The
-    adverse edge of the funding band is NOT included: the stored fields do not carry the funding-band edge, so the cost
-    here is fees + slippage only.
+    The abstain rule (M10, ``app.core.rules.abstain``) turns an alert into ``abstained`` when its pool has >= 30
+    independent outcomes and the interval's lower bound is below the funding band's adverse edge in R. That edge is never
+    negative, so an alert with such a pool and ``expected_r_ci_low < 0`` (or no interval) should not exist under the
+    current rule hash; a non-zero count here is a bug. The funding edge itself is not stored, so it is not re-tested.
     """
 
     alerts: int
@@ -251,18 +251,14 @@ class WouldAbstain:
     cost_basis: str
 
 
-COST_BASIS = 'fees+slippage only (round-trip, in R); the funding-band edge is not computable from stored fields'
+COST_BASIS = 'interval lower bound below 0 R (stored R is net of fees and funding; the funding-band edge is not stored)'
 
 
 def would_abstain(alerts: Sequence[Observation]) -> WouldAbstain:
     def counted(rows: Sequence[Observation]) -> tuple[int, int, int]:
         filled = [o for o in rows if not o.is_no_entry]
-        with_estimate = [o for o in filled if o.pool_n is not None and o.pool_n >= C.POOL_MIN_INDEPENDENT_OUTCOMES]
-        abstain = [
-            o
-            for o in with_estimate
-            if o.expected_r_ci_low is not None and o.fees_r is not None and o.expected_r_ci_low < o.fees_r
-        ]
+        with_estimate = [o for o in filled if o.pool_n is not None and o.pool_n >= C.ABSTAIN_MIN_POOL_INDEPENDENT]
+        abstain = [o for o in with_estimate if o.expected_r_ci_low is None or o.expected_r_ci_low < 0.0]
         return len(filled), len(with_estimate), len(abstain)
 
     raw = counted(alerts)

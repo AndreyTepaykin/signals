@@ -62,7 +62,6 @@ from app.core.time import ensure_utc, horizon_hours, utc_now
 from app.models import enums as E
 from app.models.decisions import Candidate
 from app.models.features import FeatureRow
-from app.worker import estimates as EST
 from app.worker.feature_job import REFERENCE_COIN, latest_closed_bar, run_feature_job
 from app.worker.feeds.health import stand_down_breaches
 
@@ -230,28 +229,6 @@ def candidate_values(
     }
 
 
-def _write_creation_estimate(session: Session, candidate_id: int, row: FeatureRow, values: dict[str, Any]) -> None:
-    """Pooled estimate at creation, when the options path is already known (alts: no Deribit book). Never changes a decision.
-
-    BTC / ETH get theirs from the options job once the verdict is written (their path is not known yet). The estimate reads
-    labeled outcomes decided and resolved before this decision (point in time) and writes the NULL estimate columns once.
-    """
-    path = EST.options_path_of(
-        source=row.source, coin=row.coin, options_verdict=None, status_reason=values['status_reason'], options_snapshot_time=None
-    )
-    if path is None:
-        return
-    target = EST.target_for(
-        decision_time=values['decision_time'],
-        horizon=row.horizon,
-        source=row.source,
-        options_path=path,
-        setup_family=values['setup_family'],
-        trend_family=values['trend_family'],
-        feature_row=row,
-    )
-    EST.fill_safely(session, candidate_id, target)
-
 # ---------------------------------------------------------------------------
 # One bar, many coins
 # ---------------------------------------------------------------------------
@@ -332,8 +309,6 @@ def run_rules_for_bar(
                 ).first()
                 outcome.result = RESULT_CREATED if inserted is not None else RESULT_PRESENT
                 outcome.candidate_id = inserted[0] if inserted is not None else None
-                if inserted is not None:
-                    _write_creation_estimate(session, inserted[0], row, values)
             report.outcomes.append(outcome)
     return report
 
@@ -356,7 +331,7 @@ def run_rules_job(session: Session, coins: Sequence[str], *, now: datetime | Non
 
 
 def run_feature_and_rules_job(session: Session, coins: Sequence[str], *, now: datetime | None = None) -> dict[str, Any]:
-    """Features, then rules, for the newest closed bar. NOT registered with the scheduler (see BUILD-LOG)."""
+    """Features, then rules, for the newest closed bar. The scheduled path is ``app.worker.pipeline``."""
     clock = ensure_utc(now) if now is not None else utc_now()
     features = run_feature_job(session, coins, now=clock)
     rules = run_rules_job(session, coins, now=clock)

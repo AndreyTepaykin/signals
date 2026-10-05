@@ -12,9 +12,12 @@ Everything that decides lives in ``app.core.options.check`` and is pure. This mo
 3. **Read the book** through ``as_of(candidate.decision_time)``: the newest ``options_metric`` row for (deribit, coin,
    horizon) visible at the decision, and the ``options_snapshot`` it came from. A snapshot that arrived after the
    decision does not exist for this candidate, in a live run or a replay.
-4. **Decide** with :func:`~app.core.options.check.check_options` and write the result with one guarded UPDATE
-   (``WHERE id = :id AND options_verdict IS NULL``): the options columns are written exactly once and a re-run changes
-   nothing.
+4. **Decide** with :func:`~app.core.options.check.check_options`.
+5. **Abstain** (M10): the pooled estimate on the path the verdict gives (stored, else computed point in time) goes
+   through :func:`app.core.rules.abstain.check_abstain`; an ``alert`` whose interval does not clear the funding band
+   becomes ``abstained`` / ``abstain:edge_below_cost``. Write the result with one guarded UPDATE
+   (``WHERE id = :id AND options_verdict IS NULL``), then the estimate (NULL -> value once): the options columns are
+   written exactly once and a re-run changes nothing.
 
 No wall clock
 -------------
@@ -57,8 +60,10 @@ from app.core import constants as C
 from app.core.options import metrics as M
 from app.core.options.book import book_from_payload
 from app.core.options.check import BookView, CheckInputs, OptionsDecision, check_options
+from app.core.rules import abstain as AB
 from app.core.rules.inputs import RuleInputs
 from app.core.rules.stops import stop_plan
+from app.core.stats import pool as PL
 from app.core.time import ensure_utc
 from app.models import enums as E
 from app.models.as_of import as_of
@@ -75,6 +80,7 @@ RESULT_PRICE_MISMATCH = 'price_mismatch'
 RESULT_NO_FEATURE_ROW = 'no_feature_row'
 RESULT_RACE = 'already_checked'
 RESULT_DRY = 'dry_run'
+RESULT_ESTIMATE_ERROR = 'estimate_error'
 
 
 @dataclass(frozen=True)
@@ -212,8 +218,20 @@ def decision_values(decision: OptionsDecision) -> dict[str, Any]:
     }
 
 
-def _write_estimate_after_check(session: Session, candidate: Candidate, decision: OptionsDecision) -> None:
-    """The options path is known now: write the pooled estimate (NULL -> value once). Changes no status, stop or cap."""
+@dataclass(frozen=True)
+class PooledEdge:
+    """The estimate the abstain rule reads: the stored one, else one computed now (``to_write`` is then set)."""
+
+    pool_n: int | None
+    expected_r_ci_low: float | None
+    to_write: PL.PoolEstimate | None = None
+
+
+def pooled_edge(session: Session, candidate: Candidate, decision: OptionsDecision, feature_row: FeatureRow | None) -> PooledEdge:
+    """The candidate's pooled estimate on the options path the verdict gives it. Reads only; may raise."""
+    if any(getattr(candidate, name) is not None for name in EST.ESTIMATE_COLUMNS):
+        low = candidate.expected_r_ci_low
+        return PooledEdge(candidate.pool_n, None if low is None else float(low))
     path = EST.options_path_of(
         source=candidate.source,
         coin=candidate.coin,
@@ -221,8 +239,6 @@ def _write_estimate_after_check(session: Session, candidate: Candidate, decision
         status_reason=decision.status_reason,
         options_snapshot_time=decision.snapshot_time,
     )
-    if path is None:
-        return
     target = EST.target_for(
         decision_time=candidate.decision_time,
         horizon=candidate.horizon,
@@ -230,30 +246,68 @@ def _write_estimate_after_check(session: Session, candidate: Candidate, decision
         options_path=path,
         setup_family=candidate.setup_family,
         trend_family=candidate.trend_family,
-        feature_row=session.get(FeatureRow, candidate.feature_row_id),
+        feature_row=feature_row,
     )
-    EST.fill_safely(session, candidate.id, target)
+    _result, estimate = EST.fill_candidate(session, candidate.id, target, dry_run=True)
+    if isinstance(estimate, PL.NoEstimate):
+        return PooledEdge(None, None)
+    return PooledEdge(estimate.n_independent, estimate.expected_r_ci_low, to_write=estimate)
+
+
+def apply_abstain(
+    values: dict[str, Any], inputs: CheckInputs, edge: PooledEdge, feature_row: FeatureRow | None
+) -> AB.AbstainCheck:
+    """Turn an ``alert`` whose pooled edge does not clear the funding band into ``abstained`` (edits ``values``)."""
+    check = AB.check_abstain(
+        status=values['status'],
+        pool_n=edge.pool_n,
+        expected_r_ci_low=edge.expected_r_ci_low,
+        funding_carry_bps=None if feature_row is None else feature_row.funding_carry_bps_horizon,
+        reference_price=inputs.reference_price,
+        stop_price=values['stop_price'],
+    )
+    if check.abstain:
+        values['status'] = E.STATUS_ABSTAINED
+        values['status_reason'] = C.STATUS_REASON_ABSTAIN_EDGE_BELOW_COST
+    return check
+
 
 def check_candidate(session: Session, candidate: Candidate, *, dry_run: bool = False) -> OptionsOutcome:
-    """Check one candidate and write the outcome once. Does not commit."""
+    """Check one candidate, apply the abstain rule and write the outcome and the pooled estimate once. Does not commit.
+
+    The estimate decides an alert now, so a failure to compute it writes nothing (``estimate_error``): the candidate
+    stays unchecked and the next run retries it, rather than alerting on a missing test.
+    """
     inputs, why = load_check_inputs(session, candidate)
     base = dict(candidate_id=candidate.id, coin=candidate.coin, horizon=candidate.horizon)
     if inputs is None:
         return OptionsOutcome(**base, result=why)
     decision = check_options(inputs)
     detail = decision.ignore_reason or ''
+    feature_row = session.get(FeatureRow, candidate.feature_row_id)
+    try:
+        with session.begin_nested():
+            edge = pooled_edge(session, candidate, decision, feature_row)
+    except Exception as exc:  # noqa: BLE001 - logged; the row is retried on the next run
+        log.exception('pooled estimate for candidate %s failed; options check deferred', candidate.id)
+        return OptionsOutcome(**base, result=RESULT_ESTIMATE_ERROR, detail=f'{type(exc).__name__}: {str(exc)[:200]}')
+    values = decision_values(decision)
+    abstain = apply_abstain(values, inputs, edge, feature_row)
+    status, reason = values['status'], values['status_reason']
+    if abstain.abstain:
+        detail = C.STATUS_REASON_ABSTAIN_EDGE_BELOW_COST
     if dry_run:
-        return OptionsOutcome(**base, result=RESULT_DRY, verdict=decision.verdict, status=decision.status, status_reason=decision.status_reason, detail=detail)
+        return OptionsOutcome(**base, result=RESULT_DRY, verdict=decision.verdict, status=status, status_reason=reason, detail=detail)
     updated = session.execute(
         update(Candidate)
         .where(Candidate.id == candidate.id, Candidate.options_verdict.is_(None))
-        .values(**decision_values(decision))
+        .values(**values)
         .returning(Candidate.id)
     ).first()
     result = RESULT_CHECKED if updated is not None else RESULT_RACE
-    if updated is not None:
-        _write_estimate_after_check(session, candidate, decision)
-    return OptionsOutcome(**base, result=result, verdict=decision.verdict, status=decision.status, status_reason=decision.status_reason, detail=detail)
+    if updated is not None and edge.to_write is not None:
+        EST.write_estimate(session, candidate.id, EST.estimate_values(edge.to_write))
+    return OptionsOutcome(**base, result=result, verdict=decision.verdict, status=status, status_reason=reason, detail=detail)
 
 
 def run_options_job(

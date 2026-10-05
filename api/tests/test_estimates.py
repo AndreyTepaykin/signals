@@ -1,11 +1,9 @@
-"""Writing the pooled estimate onto candidates: at creation, after the options check, and by one-off enrichment (throwaway schema)."""
+"""The pooled estimate on candidates: written by the options job (with the abstain rule) and by one-off enrichment (throwaway schema)."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from types import SimpleNamespace
-
 import pytest
 from sqlalchemy import select, text, update
 
@@ -222,21 +220,66 @@ def run_rules(session, coins, bar=TARGET):
     return RJ.run_rules_for_bar(session, coins, bar, source='replay', feed_breaches={}, code_version='testver')
 
 
-def test_the_rules_job_writes_the_estimate_for_an_alt_at_creation_without_changing_the_decision(session):
-    history(session, 30)
-    add_feature_rows(session, 'SOLUSDT', TARGET, source='replay', horizons=('swing',), alt_residual_z_signal_bar=1.3, **SLICE)
-    run_rules(session, ('BTCUSDT', 'SOLUSDT'))
+def decide_alt(session, **columns):
+    """Rules then options for one SOL swing candidate at TARGET. Returns the stored candidate."""
+    add_feature_rows(session, 'SOLUSDT', TARGET, source='replay', horizons=('swing',), alt_residual_z_signal_bar=1.3,
+                     **SLICE, **columns)
+    run_rules(session, ('SOLUSDT',))
     (c,) = session.execute(select(Candidate).where(Candidate.bar_close == TARGET)).scalars()
-    assert (c.coin, c.status, c.status_reason) == ('SOLUSDT', 'watch', C.STATUS_REASON_PENDING_OPTIONS_CHECK)
+    assert stored(c)['expected_r'] is None  # the rules job writes no estimate
+    OJ.run_options_job(session, source='replay')
+    return fresh(session, c)
+
+
+def test_the_options_job_writes_the_estimate_and_a_clearing_pool_keeps_the_alert(session):
+    history(session, 30)
+    c = decide_alt(session)
+    assert (c.status, c.status_reason) == ('alert', NO_BOOK)
     assert c.pool_n == 30 and c.expected_r == Decimal('1.000000') and c.p_upper_before_stop == Decimal('1.000000')
 
 
-def test_the_rules_job_without_a_pool_leaves_the_estimate_null(session):
-    history(session, 5)
+def test_without_a_pool_the_estimate_stays_null_and_the_alert_stands(session):
+    history(session, 5, r='-1.0', barrier='lower')
+    c = decide_alt(session)
+    assert c.status == 'alert' and stored(c)['expected_r'] is None and stored(c)['p_upper_before_stop'] is None
+
+
+def test_a_pool_whose_interval_sits_below_zero_abstains(session):
+    history(session, 30, r='-1.0', barrier='lower')
+    c = decide_alt(session)
+    assert (c.status, c.status_reason) == ('abstained', C.STATUS_REASON_ABSTAIN_EDGE_BELOW_COST)
+    assert c.pool_n == 30 and c.expected_r_ci_low < 0
+    assert c.options_verdict == 'ignore' and c.stop_price == c.pre_options_stop_price  # the verdict and prices are kept
+
+
+@pytest.mark.parametrize(
+    ('carry', 'status'),
+    [(None, 'alert'), (Decimal('50'), 'alert'), (Decimal('100'), 'abstained'), (Decimal('-100'), 'abstained')],
+)
+def test_the_interval_is_tested_against_the_adverse_edge_of_the_funding_band(session, carry, status):
+    # every pooled outcome is +0.5 R, so the interval is [0.5, 0.5]; 1R = 1,500 on a 96,500 close, so the edge in R is
+    # |carry| / 1e4 * 64.33: 50 bps -> 0.32 R clears, 100 bps -> 0.64 R does not, whichever sign the carry has
+    history(session, 30, r='0.5')
+    c = decide_alt(session, funding_carry_bps_horizon=carry)
+    assert c.status == status and c.expected_r_ci_low == Decimal('0.500000')
+
+
+def test_shadow_rows_get_the_estimate_but_never_abstain(session):
+    history(session, 30, r='-1.0', barrier='lower')
+    c = decide_alt(session, cvd_divergence=True, cvd_divergence_against='long')
+    assert (c.status, c.status_reason) == ('cancelled', C.STATUS_REASON_CVD_DIVERGENCE)
+    assert c.pool_n == 30
+
+
+def test_a_stored_estimate_is_used_rather_than_recomputed(session):
+    history(session, 30)  # this pool would clear
     add_feature_rows(session, 'SOLUSDT', TARGET, source='replay', horizons=('swing',), alt_residual_z_signal_bar=1.3, **SLICE)
     run_rules(session, ('SOLUSDT',))
     (c,) = session.execute(select(Candidate).where(Candidate.bar_close == TARGET)).scalars()
-    assert stored(c)['expected_r'] is None and stored(c)['p_upper_before_stop'] is None
+    session.execute(update(Candidate).where(Candidate.id == c.id).values(pool_n=40, expected_r_ci_low=Decimal('-0.2')))
+    OJ.run_options_job(session, source='replay')
+    c = fresh(session, c)
+    assert c.status == 'abstained' and c.pool_n == 40
 
 
 def test_a_btc_candidate_gets_its_estimate_when_the_options_check_writes_the_verdict(session):
@@ -245,22 +288,27 @@ def test_a_btc_candidate_gets_its_estimate_when_the_options_check_writes_the_ver
     run_rules(session, ('BTCUSDT',))
     (c,) = session.execute(select(Candidate).where(Candidate.bar_close == TARGET)).scalars()
     assert stored(c)['expected_r'] is None  # the path is not known at creation
-    decision = SimpleNamespace(verdict='ignore', status_reason='options_ignored:no_options_history', snapshot_time=None)
-    OJ._write_estimate_after_check(session, c, decision)
-    assert fresh(session, c).pool_n == 30
+    OJ.run_options_job(session, source='replay')
+    c = fresh(session, c)
+    assert c.pool_n == 30 and c.status == 'watch'  # an ignored covered coin never alerts, so it cannot abstain
 
 
-def test_an_estimate_failure_never_costs_the_candidate(session, monkeypatch):
-    history(session, 30)
+def test_an_estimate_failure_defers_the_options_check_instead_of_alerting(session, monkeypatch):
+    history(session, 30, r='-1.0', barrier='lower')
     add_feature_rows(session, 'SOLUSDT', TARGET, source='replay', horizons=('swing',), alt_residual_z_signal_bar=1.3, **SLICE)
 
     def boom(*args, **kwargs):
         raise RuntimeError('estimator down')
 
-    monkeypatch.setattr(EST.PL, 'estimate_pool', boom)
     run_rules(session, ('SOLUSDT',))
+    monkeypatch.setattr(EST.PL, 'estimate_pool', boom)
+    report = OJ.run_options_job(session, source='replay')
+    assert [o.result for o in report.outcomes] == [OJ.RESULT_ESTIMATE_ERROR]
     (c,) = session.execute(select(Candidate).where(Candidate.bar_close == TARGET)).scalars()
-    assert c.status == 'watch' and stored(c)['expected_r'] is None
+    assert (c.status, c.status_reason, c.options_verdict) == ('watch', C.STATUS_REASON_PENDING_OPTIONS_CHECK, None)
+    monkeypatch.undo()
+    OJ.run_options_job(session, source='replay')  # the next run retries it
+    assert fresh(session, c).status == 'abstained'
 
 
 def test_the_m6_fill_trigger_does_not_block_the_estimate_columns(session):

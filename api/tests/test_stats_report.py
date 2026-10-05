@@ -6,7 +6,7 @@ import ast
 import json
 import pathlib
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -245,11 +245,22 @@ def test_text_and_json_output_carry_raw_independent_and_the_plain_words():
     assert parsed['cohorts'][0]['kill_rule_preview']['status'] == 'preview_not_yet_applicable'
 
 
-def test_stats_parameters_do_not_feed_rule_hash():
+def test_report_only_parameters_do_not_feed_rule_hash():
     payload = json.dumps(hashing.rule_hash_input(), default=str)
-    for name in ('THIN_LOOKBACK_CUTOFF', 'AMBIGUOUS_SHARE_FLAG', 'BOOTSTRAP_SEED', 'VOL_BUCKET_EDGES', 'MIN_INDEPENDENT_TO_CONCLUDE'):
-        assert name not in payload
+    for name in ('AMBIGUOUS_SHARE_FLAG', 'MIN_INDEPENDENT_TO_CONCLUDE', 'RELIABILITY_BIN_EDGES'):
+        assert f'"{name}"' not in payload.replace('\\"', '"')
         assert not hasattr(C, name)
+
+
+def test_every_parameter_the_pooled_estimate_reads_is_a_hashed_constant():
+    from app.core.stats import params as SP
+
+    frozen = hashing.frozen_constants()
+    assert SP.BOOTSTRAP_RESAMPLES == frozen['ESTIMATE_BOOTSTRAP_RESAMPLES']
+    assert SP.BOOTSTRAP_SEED == frozen['ESTIMATE_BOOTSTRAP_SEED']
+    assert SP.VOL_BUCKET_EDGES == C.ESTIMATE_VOL_BUCKET_EDGES and SP.VOL_BUCKET_NAMES == C.ESTIMATE_VOL_BUCKET_NAMES
+    assert SP.THIN_LOOKBACK_CUTOFF == datetime(2026, 9, 24, tzinfo=timezone.utc)
+    assert SP.INTERVAL_CONFIDENCE == C.INTERVAL_CONFIDENCE and SP.MIN_INDEPENDENT_TO_CONCLUDE == C.POOL_MIN_INDEPENDENT_OUTCOMES
 
 
 def test_stats_floors_are_read_from_the_frozen_constants_not_restated():
@@ -368,10 +379,10 @@ def abstain_row(pool_n, ci_low, fees_r=0.06, **kw):
     return obs(pool_n=pool_n, expected_r_ci_low=ci_low, fees_r=fees_r, **kw)
 
 
-def test_would_abstain_counts_alerts_whose_pool_is_big_enough_and_whose_interval_low_is_under_cost():
+def test_would_abstain_counts_alerts_the_abstain_rule_should_have_stopped():
     rows = [
-        abstain_row(30, 0.05),   # pool ok, low below cost 0.06 -> abstain
-        abstain_row(45, 0.06),   # low equals cost: not below
+        abstain_row(30, -0.05),  # pool ok, low below 0 R -> should have abstained
+        abstain_row(45, 0.0),    # low equals 0: not below
         abstain_row(31, 0.40),   # clear
         abstain_row(29, -1.0),   # pool under the floor: no estimate to act on
         obs(),                   # no estimate stored
@@ -380,7 +391,12 @@ def test_would_abstain_counts_alerts_whose_pool_is_big_enough_and_whose_interval
     w = R.build_report(rows).cohorts[0].would_abstain
     assert (w.alerts, w.alerts_with_estimate, w.would_abstain) == (5, 3, 1)
     assert w.alerts_independent == 5 and w.would_abstain_independent == 1
-    assert 'funding' in w.cost_basis and 'fees+slippage only' in w.cost_basis
+    assert 'funding' in w.cost_basis and '0 R' in w.cost_basis
+
+
+def test_would_abstain_counts_a_pool_at_the_floor_without_an_interval():
+    w = R.build_report([abstain_row(30, None)]).cohorts[0].would_abstain
+    assert w.would_abstain == 1
 
 
 def test_would_abstain_is_a_count_only_and_changes_nothing():

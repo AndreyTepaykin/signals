@@ -6,20 +6,24 @@ For each bar close from ``start`` through ``end`` (inclusive, on the 15m grid):
    gated at ``as_of(bar_close)``. Replay loads feeds once per coin via
    :func:`app.worker.replay_feeds.preload_replay_feeds` (SQL still uses ``as_of(range_end)``) and builds each bar's
    inputs in memory with the same visibility windows as :func:`app.worker.feature_job.load_inputs`.
-2. **Rules** — :func:`app.worker.rules_job.run_rules_for_bar` with ``source='replay'``, ``decision_time=bar_close``,
+2. **Labels** — :func:`app.worker.label_job.run_label_job` at ``as_of_time=bar_close``, as the live pipeline labels
+   before it decides, so the pooled estimate behind the abstain rule (M10) sees every outcome resolved by then.
+3. **Rules** — :func:`app.worker.rules_job.run_rules_for_bar` with ``source='replay'``, ``decision_time=bar_close``,
    and no feed-health breaches (replay has no honest breach history).
-3. **Options** — :func:`app.worker.options_job.run_options_job` for ``source='replay'`` after each bar.
+4. **Options** — :func:`app.worker.options_job.run_options_job` for ``source='replay'`` (verdict, estimate, abstain).
 
-After the walk, **labels** — :func:`app.worker.label_job.run_label_job` with ``as_of_time=label_at`` (default
-``end``), never the wall clock.
+After the walk, a last **label** pass at ``as_of_time=label_at`` (default ``end``), never the wall clock.
+
+Replay candidates on another rule hash stop the run (:class:`StaleReplayRows`): the candidate unique key has no rule
+hash, so they would silently keep every bar they cover. ``--purge-stale`` deletes them (labels cascade) first.
 
 Real runs (non-dry) use three phases:
 
 * **Phase A** — feature rows for every (coin, bar), parallel by coin (``--workers N``, default ``min(7, len(coins))``).
   Each worker owns a DB session, preloads once, commits every ``FEATURE_COMMIT_CHUNK`` bars. Rows are idempotent
   (existing keys are skipped).
-* **Phase B** — walk bars in time order; rules and options per bar (reference coin first), single process, commit
-  after each bar.
+* **Phase B** — walk bars in time order; labels, rules and options per bar (reference coin first), single process,
+  commit after each bar.
 * **Phase C** — one label pass.
 
 Dry run
@@ -40,7 +44,7 @@ Nothing in this module calls ``utc_now`` or reads the clock for decisions. Calle
 
 CLI
 ---
-``python -m app.worker.replay --coins A,B --start ISO --end ISO [--label-at ISO] [--workers N] [--dry-run]``
+``python -m app.worker.replay --coins A,B --start ISO --end ISO [--label-at ISO] [--workers N] [--dry-run] [--purge-stale]``
 """
 
 from __future__ import annotations
@@ -55,7 +59,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import event
+from sqlalchemy import delete, event, func, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
@@ -70,6 +74,7 @@ from app.core.hashing import code_version as current_code_version
 from app.core.hashing import rule_hash as current_rule_hash
 from app.core.time import ensure_utc
 from app.models import enums as E
+from app.models.decisions import Candidate
 from app.worker import feature_job as FJ
 from app.worker import label_job as LJ
 from app.worker import options_job as OJ
@@ -108,6 +113,7 @@ class ReplayReport:
     pending_by_detail: dict[str, int] = field(default_factory=dict)
     stale_rule_hash: int = 0
     label_errors: int = 0
+    stale_purged: int = 0
     elapsed_seconds: float = 0.0
 
     @property
@@ -131,9 +137,45 @@ class ReplayReport:
                 f'labels labeled={self.labeled} no_entry={self.no_entry} funding_partial={self.funding_partial} '
                 f'pending={self.pending} pending_detail={dict(self.pending_by_detail)} stale_rule_hash={self.stale_rule_hash} errors={self.label_errors}'
             ),
+            f'stale_purged={self.stale_purged}',
             f'elapsed={self.elapsed_seconds:.2f}s bars_per_s={self.bars_per_second:.3f}',
         ]
         return ' '.join(parts)
+
+
+class StaleReplayRows(RuntimeError):
+    """Replay candidates decided under another rule hash exist; they would block this run's rows on the unique key."""
+
+    def __init__(self, count: int, rule_hash: str) -> None:
+        super().__init__(
+            f'{count} replay candidate(s) carry a rule hash other than {rule_hash[:12]}...; '
+            'rerun with --purge-stale to delete them (and their labels) first'
+        )
+        self.count = count
+
+
+def _stale_replay_filter(rule_hash: str) -> tuple[Any, ...]:
+    return (Candidate.source == E.SOURCE_REPLAY, Candidate.rule_hash != rule_hash)
+
+
+def count_stale_replay(session: Session, rule_hash: str) -> int:
+    return int(session.execute(select(func.count()).select_from(Candidate).where(*_stale_replay_filter(rule_hash))).scalar_one())
+
+
+def purge_stale_replay(session: Session, rule_hash: str) -> int:
+    """Delete every replay candidate on another rule hash (labels cascade). Never touches live rows. Does not commit."""
+    result = session.execute(delete(Candidate).where(*_stale_replay_filter(rule_hash)))
+    return int(result.rowcount or 0)  # type: ignore[attr-defined]
+
+
+def _prepare_stale(session: Session, report: ReplayReport, *, purge: bool) -> None:
+    stale = count_stale_replay(session, report.rule_hash)
+    if not stale:
+        return
+    if not purge:
+        raise StaleReplayRows(stale, report.rule_hash)
+    report.stale_purged = purge_stale_replay(session, report.rule_hash)
+    log.warning('purged %d stale replay candidate(s) (rule hash != %s)', report.stale_purged, report.rule_hash)
 
 
 @dataclass
@@ -261,6 +303,14 @@ def _features_one_bar(
         _accumulate_feature_report(report, feat)
 
 
+def _accumulate_bar_labels(report: ReplayReport, label_report: LJ.LabelReport) -> None:
+    """Labels written by a per-bar pass. Pending and stale counts are left to the final pass (they would repeat per bar)."""
+    report.labeled += label_report.labeled
+    report.no_entry += label_report.no_entry
+    report.funding_partial += sum(1 for o in label_report.outcomes if o.result == LJ.RESULT_LABELED and o.funding_partial)
+    report.label_errors += label_report.count(LJ.RESULT_ERROR)
+
+
 def _rules_options_one_bar(
     session: Session,
     report: ReplayReport,
@@ -269,6 +319,10 @@ def _rules_options_one_bar(
     coin_list: Sequence[str],
     version: str,
 ) -> None:
+    # Label first, as the live pipeline does, so the pooled estimate behind the abstain rule sees every outcome
+    # resolved by this bar close (the labeler reads through as_of(bar_close)).
+    labels = LJ.run_label_job(session, bar_close, source=E.SOURCE_REPLAY, coins=coin_list, code_version=version)
+    _accumulate_bar_labels(report, labels)
     rules = RJ.run_rules_for_bar(
         session,
         coin_list,
@@ -498,10 +552,13 @@ def run_replay(
     history_policy: HistoryPolicy | None = None,
     workers: int | None = None,
     search_path: str | None = None,
+    purge_stale: bool = False,
 ) -> ReplayReport:
-    """Walk ``start``..``end`` and run features, rules, options, then label at ``label_at``.
+    """Walk ``start``..``end`` and run features, then labels, rules and options per bar, then label at ``label_at``.
 
-    Real runs use phased features (optional process pool), then rules/options per bar, then labels.
+    Replay candidates on another rule hash raise :class:`StaleReplayRows` before anything runs (they would hold the
+    unique key of every bar they cover); ``purge_stale`` deletes them first, inside the run's transaction.
+    Real runs use phased features (optional process pool), then labels/rules/options per bar, then labels.
     ``dry_run`` uses one transaction and rolls back at the end (single process, preloaded feeds).
     Every session comes from ``session_or_factory`` except the pool workers', which open the configured
     database; ``search_path`` must then name the schema the factory's sessions use (None = the default).
@@ -521,6 +578,7 @@ def run_replay(
     if dry_run and passed_session is not None:
         nested = passed_session.begin_nested()
         try:
+            _prepare_stale(passed_session, report, purge=purge_stale)
             _walk_dry_run(
                 passed_session,
                 report,
@@ -535,9 +593,14 @@ def run_replay(
     elif dry_run:
         factory = session_or_factory if isinstance(session_or_factory, sessionmaker) else session_or_factory
         with factory() as session:
-            _walk_dry_run(session, report, bars=bars, coin_list=coin_list, label=label, version=version, policy=policy)
-            session.rollback()
+            try:
+                _prepare_stale(session, report, purge=purge_stale)
+                _walk_dry_run(session, report, bars=bars, coin_list=coin_list, label=label, version=version, policy=policy)
+            finally:
+                session.rollback()
     elif passed_session is not None:
+        _prepare_stale(passed_session, report, purge=purge_stale)
+        passed_session.commit()
         preload_map = _build_preload_map(passed_session, coin_list, bars)
         _phase_a_features_session(
             passed_session,
@@ -556,6 +619,10 @@ def run_replay(
         _run_label_pass(passed_session, report, label=label, coin_list=coin_list, version=version)
         passed_session.commit()
     else:
+        factory = session_or_factory if isinstance(session_or_factory, sessionmaker) else session_or_factory
+        with factory() as session:
+            _prepare_stale(session, report, purge=purge_stale)
+            session.commit()
         _parallel_phase_a(
             report,
             bars=bars,
@@ -574,7 +641,6 @@ def run_replay(
             version=version,
             passed_session=None,
         )
-        factory = session_or_factory if isinstance(session_or_factory, sessionmaker) else session_or_factory
         with factory() as session:
             _run_label_pass(session, report, label=label, coin_list=coin_list, version=version)
             session.commit()
@@ -601,6 +667,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         help='feature phase process pool size (default min(7, coins); ignored for --dry-run)',
     )
     parser.add_argument('--dry-run', action='store_true', help='run the full pipeline in one transaction, then roll back')
+    parser.add_argument(
+        '--purge-stale', action='store_true', help='delete replay candidates (and labels) on another rule hash first'
+    )
     args = parser.parse_args(argv)
     coins = parse_symbols(args.coins) if args.coins else None
     try:
@@ -613,15 +682,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
-    report = run_replay(
-        get_sync_session_factory(),
-        coins=coins or get_settings().watchlist_symbols,
-        start=start,
-        end=end,
-        label_at=label_at,
-        dry_run=args.dry_run,
-        workers=args.workers,
-    )
+    try:
+        report = run_replay(
+            get_sync_session_factory(),
+            coins=coins or get_settings().watchlist_symbols,
+            start=start,
+            end=end,
+            label_at=label_at,
+            dry_run=args.dry_run,
+            workers=args.workers,
+            purge_stale=args.purge_stale,
+        )
+    except StaleReplayRows as exc:
+        print(exc, file=sys.stderr)
+        return 2
     print(report.format_summary())
     return 0
 

@@ -115,7 +115,7 @@ def format_cohort(c: CohortReport) -> list[str]:
         out.append('  kill rule: not evaluated (thin lookback cohorts get neither the rule nor a preview)')
     w = c.would_abstain
     out.append(
-        f'  would_abstain (alerts; no rule applied): {w.would_abstain} of {w.alerts_with_estimate} with a pool >= {C.POOL_MIN_INDEPENDENT_OUTCOMES}'
+        f'  would_abstain (alerts that should have abstained; must be 0): {w.would_abstain} of {w.alerts_with_estimate} with a pool >= {C.ABSTAIN_MIN_POOL_INDEPENDENT}'
         f' ({w.alerts} filled alerts) | independent {w.would_abstain_independent} of {w.alerts_with_estimate_independent} ({w.alerts_independent})'
         f' | cost: {w.cost_basis}'
     )

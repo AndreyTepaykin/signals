@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     ntfy_url: str = ''
     ntfy_token: str = ''
     notify_poll_seconds: int = Field(60, ge=15, le=3600)
+    # Live signal pipeline (labels, features, rules, options for the newest closed 15m bar).
+    signal_pipeline_poll_seconds: int = Field(60, ge=15, le=300)
 
     # -- watchlist (a Preference, not a frozen rule) ------------------------
     watchlist: str = ','.join(DEFAULT_WATCHLIST)

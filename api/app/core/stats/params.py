@@ -1,9 +1,9 @@
-"""Stats-only parameters (Milestone 8).
+"""Stats parameters (Milestone 8).
 
-Nothing in this module feeds ``rule_hash``: the hash reads ``app.core.constants`` and
-``app.core.features.params`` and nothing else. These values only decide how outcomes are *reported*; changing one
-re-slices the report, never a label or a decision. Where a floor already exists in ``constants`` it is read from there
-(never restated), so the report and the rules cannot disagree about "30" or "300" or "20".
+The hash reads ``app.core.constants`` and ``app.core.features.params`` and nothing else. Values defined here only decide
+how outcomes are *reported*. Everything the pooled estimate depends on (floors, interval, bootstrap, vol buckets, thin
+lookback) is read from ``constants`` because the abstain rule (M10) turns that estimate into a decision; those names are
+aliases, never restated numbers.
 """
 
 from __future__ import annotations
@@ -40,23 +40,23 @@ AMBIGUOUS_SHARE_FLAG: float = 0.05
 #: (2026-09-04 + 20 days) form the `thin` lookback cohort; later ones are `full`. It is a reporting split only.
 BACKFILL_START: datetime = datetime(2026, 9, 4, tzinfo=timezone.utc)
 THIN_LOOKBACK_DAYS: int = 20
-THIN_LOOKBACK_CUTOFF: datetime = datetime(2026, 9, 24, tzinfo=timezone.utc)
+THIN_LOOKBACK_CUTOFF: datetime = datetime.fromisoformat(C.ESTIMATE_THIN_LOOKBACK_CUTOFF_UTC).astimezone(timezone.utc)
 
 # ---------------------------------------------------------------------------
 # Pool cells
 # ---------------------------------------------------------------------------
 #: The vol-percentile pool dimension needs buckets; the spec names the dimension but no edges. Terciles of the
 #: realized-vol percentile (stored 0..1): `low` below the first edge, `high` from the second.
-VOL_BUCKET_EDGES: tuple[float, float] = (1.0 / 3.0, 2.0 / 3.0)
-VOL_BUCKET_NAMES: tuple[str, str, str] = ('low', 'mid', 'high')
+VOL_BUCKET_EDGES: tuple[float, float] = C.ESTIMATE_VOL_BUCKET_EDGES
+VOL_BUCKET_NAMES: tuple[str, str, str] = C.ESTIMATE_VOL_BUCKET_NAMES
 UNKNOWN = 'unknown'
 
 # ---------------------------------------------------------------------------
 # Intervals
 # ---------------------------------------------------------------------------
 #: Percentile bootstrap over the independent outcomes, fixed seed so a rerun prints the same interval.
-BOOTSTRAP_RESAMPLES: int = 4000
-BOOTSTRAP_SEED: int = 20261004
+BOOTSTRAP_RESAMPLES: int = C.ESTIMATE_BOOTSTRAP_RESAMPLES
+BOOTSTRAP_SEED: int = C.ESTIMATE_BOOTSTRAP_SEED
 
 # ---------------------------------------------------------------------------
 # Reliability diagram

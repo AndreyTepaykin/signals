@@ -413,7 +413,7 @@ def summarize(report: LabelReport) -> dict[str, Any]:
 
 
 def run_live_label_job(session: Session, *, now: datetime | None = None) -> dict[str, Any]:
-    """One live tick over live candidates. NOT registered with the scheduler (see BUILD-LOG)."""
+    """One pass over live candidates. The scheduled path is ``app.worker.pipeline`` (labels first in every tick)."""
     clock = ensure_utc(now) if now is not None else utc_now()
     return summarize(run_label_job(session, clock, source=E.SOURCE_LIVE))
 

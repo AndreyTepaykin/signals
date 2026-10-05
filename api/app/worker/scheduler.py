@@ -10,6 +10,8 @@ Job                        Default    What it does
 ``binance_funding_settled``  300 s    settled prints, stamped at the print
 ``binance_funding_predicted`` 60 s    the current estimated rate
 ``feed_health``            60 s       recompute staleness for every feed
+``notify``                 60 s       ntfy on stand-down changes and new live alerts
+``signal_pipeline``        60 s       labels, then features/rules/options for the newest 15m bar
 ``deribit_options_book``   300 s      public Deribit book, BTC/ETH (only with ``deribit_enabled``)
 (stream)                   always on  ``!forceOrder@arr`` consumer (own thread)
 =========================  =========  =======================================

@@ -1,15 +1,17 @@
-"""Write the pooled estimate onto a candidate (M8.1): at creation, after the options check, and by one-off enrichment.
+"""Write the pooled estimate onto a candidate (M8.1): in the options job, and by one-off enrichment.
 
-All three paths call the same pure estimator (:func:`app.core.stats.pool.estimate_pool`) on the same point-in-time history,
-and all three write through :func:`write_estimate`, a guarded ``UPDATE ... WHERE <estimate columns> IS NULL`` that fills
+Both paths call the same pure estimator (:func:`app.core.stats.pool.estimate_pool`) on the same point-in-time history,
+and both write through :func:`write_estimate`, a guarded ``UPDATE ... WHERE <estimate columns> IS NULL`` that fills
 NULL -> value once and never overwrites a stored estimate. The estimate columns are not covered by the write-once fill
-trigger (``candidate_freeze_fill_values`` guards the entry price, 1R, barriers and deadline only), and the estimate is not
-an input to the status or decision logic: a candidate's status, reason, direction and barriers are identical with or
-without it.
+trigger (``candidate_freeze_fill_values`` guards the entry price, 1R, barriers and deadline only).
+
+Since M10 the estimate is a decision input: the options job computes it with the verdict and the abstain rule may turn an
+``alert`` into ``abstained`` (:mod:`app.worker.options_job`). Enrichment never changes a status; it only fills estimates
+on rows checked before a pool existed for them.
 
 The options path of a candidate decides its pool, so it must be known: an alt has no Deribit book and is on
 ``no_options_book`` from the start; BTC / ETH are known only after the options check has written the verdict. A BTC / ETH
-candidate whose check has not run is left alone (``no_options_path``) until the options job calls this module.
+candidate whose check has not run is left alone (``no_options_path``) until the options job reaches it.
 """
 
 from __future__ import annotations
@@ -161,16 +163,6 @@ def fill_candidate(
     if dry_run:
         return FILLED, estimate
     return (FILLED if write_estimate(session, candidate_id, estimate_values(estimate)) else RACE), estimate
-
-
-def fill_safely(session: Session, candidate_id: int, target: PL.PoolTarget) -> str | None:
-    """`fill_candidate` for the live write paths: inside a SAVEPOINT, and an estimate failure never costs a candidate."""
-    try:
-        with session.begin_nested():
-            return fill_candidate(session, candidate_id, target)[0]
-    except Exception:  # noqa: BLE001 - the estimate is advisory; the decision path must not depend on it
-        log.exception('pooled estimate for candidate %s failed', candidate_id)
-        return None
 
 
 # ---------------------------------------------------------------------------

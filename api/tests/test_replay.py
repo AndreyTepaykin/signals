@@ -477,6 +477,67 @@ def test_replay_resume_matches_one_uninterrupted_run(session):
     assert snapshot() == expected
 
 
+def _stale_rows(session):
+    from tests.conftest import make_candidate
+    from tests.test_stats_job import add_label
+
+    old = '0' * 64
+    replay_row = make_candidate(session, coin='ETHUSDT', source=E.SOURCE_REPLAY, bar_close=T0 - timedelta(days=1), rule_hash=old,
+                                options_verdict='ignore')
+    add_label(session, replay_row, rule=old)
+    live_row = make_candidate(session, coin='ETHUSDT', source=E.SOURCE_LIVE, bar_close=T0 - timedelta(days=1), rule_hash=old)
+    return replay_row, live_row
+
+
+def test_stale_replay_rows_stop_the_run_unless_purged(session):
+    add_feature_rows(session, 'BTCUSDT', T0, source=E.SOURCE_REPLAY, horizons=('swing',))
+    replay_row, live_row = _stale_rows(session)
+    with pytest.raises(RP.StaleReplayRows) as caught:
+        RP.run_replay(session, coins=['BTCUSDT'], start=T0, end=T0, label_at=T0)
+    assert caught.value.count == 1
+    assert session.scalar(select(func.count()).select_from(Candidate).where(Candidate.source == E.SOURCE_REPLAY)) == 1
+
+    report = RP.run_replay(session, coins=['BTCUSDT'], start=T0, end=T0, label_at=T0, purge_stale=True)
+    assert report.stale_purged == 1
+    session.expire_all()
+    assert session.get(Candidate, replay_row.id) is None
+    assert session.scalar(select(func.count()).select_from(Label).where(Label.candidate_id == replay_row.id)) == 0
+    assert session.get(Candidate, live_row.id) is not None  # live rows are never purged
+    hashes = set(session.scalars(select(Candidate.rule_hash).where(Candidate.source == E.SOURCE_REPLAY)))
+    assert hashes == {current_rule_hash()}
+
+
+def test_a_dry_run_purge_is_rolled_back_with_everything_else(session):
+    add_feature_rows(session, 'BTCUSDT', T0, source=E.SOURCE_REPLAY, horizons=('swing',))
+    replay_row, _live_row = _stale_rows(session)
+    report = RP.run_replay(session, coins=['BTCUSDT'], start=T0, end=T0, label_at=T0, dry_run=True, purge_stale=True)
+    assert report.stale_purged == 1
+    session.expire_all()
+    assert session.get(Candidate, replay_row.id) is not None
+
+
+def test_replay_labels_each_bar_before_deciding_it(session, monkeypatch):
+    t1 = T0 + M15
+    add_feature_rows(session, 'BTCUSDT', T0, source=E.SOURCE_REPLAY, horizons=('swing',))
+    add_feature_rows(session, 'BTCUSDT', t1, source=E.SOURCE_REPLAY, horizons=('swing',))
+    calls: list[tuple[str, datetime]] = []
+    real_label, real_rules = LJ.run_label_job, RJ.run_rules_for_bar
+
+    def label(session_, as_of_time, **kw):
+        calls.append(('label', as_of_time))
+        return real_label(session_, as_of_time, **kw)
+
+    def rules(session_, coins, bar_close, **kw):
+        calls.append(('rules', bar_close))
+        return real_rules(session_, coins, bar_close, **kw)
+
+    monkeypatch.setattr(LJ, 'run_label_job', label)
+    monkeypatch.setattr(RJ, 'run_rules_for_bar', rules)
+    end_label = t1 + timedelta(hours=1)
+    RP.run_replay(session, coins=['BTCUSDT'], start=T0, end=t1, label_at=end_label)
+    assert calls == [('label', T0), ('rules', T0), ('label', t1), ('rules', t1), ('label', end_label)]
+
+
 # ---------------------------------------------------------------------------
 # Preloaded feeds (replay performance path)
 # ---------------------------------------------------------------------------

@@ -175,10 +175,36 @@ def _notify_post_lines(tree: ast.AST) -> set[int]:
     return set()
 
 
+def _replay_sql_delete_lines(tree: ast.AST) -> set[int]:
+    """`delete` from sqlalchemy, imported, and called as `delete(Candidate)` inside `purge_stale_replay` only."""
+    lines: set[int] = set()
+    for node in tree.body:  # type: ignore[attr-defined]
+        if isinstance(node, ast.ImportFrom) and node.module == 'sqlalchemy' and any(a.name == 'delete' for a in node.names):
+            lines.add(node.lineno)
+        if isinstance(node, ast.FunctionDef) and node.name == 'purge_stale_replay':
+            for sub in ast.walk(node):
+                if (
+                    isinstance(sub, ast.Call)
+                    and isinstance(sub.func, ast.Name)
+                    and sub.func.id == 'delete'
+                    and len(sub.args) == 1
+                    and isinstance(sub.args[0], ast.Name)
+                    and sub.args[0].id == 'Candidate'
+                ):
+                    lines.add(sub.lineno)
+    return lines
+
+
+def test_the_replay_purge_is_the_only_sql_delete_exemption():
+    trees = dict((path.name, tree) for path, tree in worker_trees())
+    assert len(_replay_sql_delete_lines(trees['replay.py'])) == 2
+
+
 def test_the_worker_has_no_signing_no_keys_and_only_read_verbs():
     problems: list[str] = []
     for path, tree in worker_trees():
         allowed_posts = _notify_post_lines(tree) if path.name == 'notify.py' else set()
+        allowed_deletes = _replay_sql_delete_lines(tree) if path.name == 'replay.py' else set()
         for node in ast.walk(tree):
             names: list[str] = []
             if isinstance(node, ast.Attribute):
@@ -194,6 +220,8 @@ def test_the_worker_has_no_signing_no_keys_and_only_read_verbs():
             for name in names:
                 low = name.lower()
                 if path.name == 'notify.py' and low == 'post' and node.lineno in allowed_posts:
+                    continue
+                if path.name == 'replay.py' and name == 'delete' and node.lineno in allowed_deletes:
                     continue
                 if low in FORBIDDEN_IDENTIFIERS:
                     problems.append(f'{path.name}:{node.lineno} uses {name!r}')

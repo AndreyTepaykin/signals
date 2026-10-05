@@ -486,7 +486,7 @@ def test_the_scheduler_registers_the_deribit_job_only_when_a_client_exists():
     jobs = {job.id: job for job in with_client.get_jobs()}
     assert health.FEED_DERIBIT_BOOK in jobs and jobs[health.FEED_DERIBIT_BOOK].trigger.interval == timedelta(seconds=300)
     assert options_job_intervals(make_settings()) == {health.FEED_DERIBIT_BOOK: 300} and set(OPTIONS_JOBS) == {health.FEED_DERIBIT_BOOK}
-    assert len({job.id for job in without.get_jobs()}) == 6  # Binance jobs + notify, unchanged Deribit gating
+    assert len({job.id for job in without.get_jobs()}) == 7  # Binance jobs + notify + signal pipeline, unchanged Deribit gating
 
 
 def test_to_ms_and_from_ms_round_trip_the_fixture_instant():

@@ -47,6 +47,7 @@ JOB_FUNDING_SETTLED = 'binance_funding_settled'
 JOB_FUNDING_PREDICTED = 'binance_funding_predicted'
 JOB_FEED_HEALTH = 'feed_health'
 JOB_NOTIFY = 'notify'
+JOB_SIGNAL_PIPELINE = 'signal_pipeline'
 JOB_FORCE_ORDER_STREAM = 'binance_force_order_stream'
 LIVE_JOB_NAMES = (
     JOB_KLINES,
@@ -55,6 +56,7 @@ LIVE_JOB_NAMES = (
     JOB_FUNDING_PREDICTED,
     JOB_FEED_HEALTH,
     JOB_NOTIFY,
+    JOB_SIGNAL_PIPELINE,
     JOB_FORCE_ORDER_STREAM,
 )
 #: The Deribit poller. Separate from `LIVE_JOB_NAMES` / `JOBS`: it exists only when the worker holds a
@@ -318,6 +320,29 @@ def job_notify(session: Session, ctx: WorkerContext) -> JobOutcome:
     return outcome
 
 
+def job_signal_pipeline(session: Session, ctx: WorkerContext) -> JobOutcome:
+    """Labels, then features, rules and options for the newest closed 15m bar (``app.worker.pipeline``)."""
+    from app.worker.pipeline import run_signal_pipeline
+
+    outcome = JobOutcome()
+    detail = run_signal_pipeline(
+        session, ctx.settings.watchlist_symbols, now=ctx.client.now(), code_version=ctx.code_version
+    )
+    outcome.detail.update(detail)
+    outcome.rows_touched = (
+        detail['labels']['labeled'] + detail['labels']['no_entry'] + detail['features']['written']
+        + detail['rules']['created'] + detail['options']['checked']
+    )
+    if detail['labels']['errors']:
+        outcome.errors.append(f"{detail['labels']['errors']} label error(s)")
+    if detail['options']['estimate_errors']:
+        outcome.errors.append(f"{detail['options']['estimate_errors']} options check(s) deferred: estimate error")
+    if detail['features']['hash_mismatches']:
+        outcome.errors.append(f"{detail['features']['hash_mismatches']} feature hash mismatch(es)")
+    outcome.skipped = outcome.rows_touched == 0 and not outcome.errors
+    return outcome
+
+
 def job_feed_health(session: Session, ctx: WorkerContext) -> JobOutcome:
     """Recompute ``feed_health`` for every gating feed from what is actually stored."""
     outcome = JobOutcome()
@@ -343,6 +368,7 @@ JOBS: dict[str, JobFn] = {
     JOB_FUNDING_PREDICTED: job_funding_predicted,
     JOB_FEED_HEALTH: job_feed_health,
     JOB_NOTIFY: job_notify,
+    JOB_SIGNAL_PIPELINE: job_signal_pipeline,
 }
 
 
@@ -355,6 +381,7 @@ def job_intervals(settings: Settings) -> dict[str, int]:
         JOB_FUNDING_PREDICTED: settings.feed_funding_predicted_poll_seconds,
         JOB_FEED_HEALTH: settings.feed_health_poll_seconds,
         JOB_NOTIFY: settings.notify_poll_seconds,
+        JOB_SIGNAL_PIPELINE: settings.signal_pipeline_poll_seconds,
     }
 
 def job_deribit_book(session: Session, ctx: WorkerContext) -> JobOutcome:

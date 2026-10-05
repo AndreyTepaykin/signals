@@ -54,7 +54,7 @@ def test_changing_a_label_constant_changes_the_rule_hash(name):
 
 
 def test_the_rule_version_is_the_one_that_introduced_the_replay_options_marker():
-    assert C.RULE_VERSION == 'phase1-v6'
+    assert C.RULE_VERSION == 'phase1-v7'
 
 
 def test_the_derived_labeler_params_follow_the_hashed_constants():
