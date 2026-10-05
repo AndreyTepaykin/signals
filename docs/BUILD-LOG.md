@@ -1006,3 +1006,61 @@ A read-only FastAPI layer over the candidate, label, stats and feed-health table
 - `rule_hash()` -> `ee25b0d73c1469bef61b85822264d47347adb43a9a090018eb8e151a70605c90` (unchanged).
 - `cd repo/web; npx ng test --watch=false` -> 9 passed; `npm run build` -> `repo/web/dist/web`.
 - Browser check on `npm start` (http://localhost:4200) against the running API: live shows empty states and the feed-health table; replay shows 833 cards, 817 tracker rows, four expectancy cohorts and four reliability cohorts (no bins, Brier n/a, as expected with no stored P). `/stand-down` inactive. The naive baseline for `replay/alts/full` now reads -0.132 [-0.187, -0.077], n=126 (M8.1: -0.125, n=123): the baseline is computed as of now, and three more events have their bars.
+
+## M10 - Gate: abstain rule, live signal pipeline, Phase 1 exit checks
+
+- Date: 2026-10-05
+- Model: Claude Opus 5.5 (no subagent, per the model plan)
+
+The abstain rule goes into the options job, the arithmetic behind the pooled estimate becomes hashed, the labeler, rules and options run live in one scheduled job, and replay labels each bar before deciding it. `RULE_VERSION = 'phase1-v7'`, `rule_hash = 443d1f49564fb16fe3cfbf7e52d638d1c1c746faab2aaf3d00a8613f2389680d` (was `ee25b0d7...`). No migration.
+
+### Decisions (orchestrator, 2026-10-05)
+1. **Abstain rule** (M8.1 decision 5): an `alert` whose pool has at least 30 independent outcomes abstains when `expected_r_ci_low < cost edge`. The cost edge is the adverse edge of the funding band, |`feature_row.funding_carry_bps_horizon`|, turned into R at the signal bar close: `edge_bps / 1e4 * reference_price / |reference_price - stop_price|`. When the carry is unknown, the edge is 0 R. Fees are not charged again, because stored R is already net. A pool of 30 or more with no interval also abstains. The comparison is strict. Only `alert` is tested: shadow, watch and cancelled rows get the estimate but keep their status. Result: status `abstained`, reason `abstain:edge_below_cost`. Each convention is a hashed constant (`ABSTAIN_*`), and `abstain.check_conventions()` refuses at import any value the code does not implement.
+2. **The estimate is now a decision input, so its arithmetic is hashed.** Bootstrap resamples and seed, volatility bucket edges and names, and the thin-lookback cutoff moved from `stats/params.py` into `constants.py` (`ESTIMATE_*`). `params.py` keeps aliases. Report-only parameters (reliability bins, kill-rule size and the rest) stay unhashed (tested).
+3. **The options job is the only live estimate path.** The creation-time write in `rules_job` was removed. Every candidate passes through the options check: alts straight away, BTC and ETH with their book. There the estimate is computed point in time (or read back if already stored), abstain is applied, and the verdict and estimate are written together. If the estimator raises, nothing is written and the result is `estimate_error`, so the next run retries. A candidate never alerts without the check.
+4. **One live job, `signal_pipeline`, every `SIGNAL_PIPELINE_POLL_SECONDS` (60).** Per tick, committing after each step: label live candidates at `now`; assemble feature rows for the latest closed bar, only for coins missing them; run rules once BTCUSDT has rows (BTC context gates the alts), else defer; run the options job. Repeat ticks are idempotent. A bar the worker missed while down is not decided afterwards. `stats_job --enrich-estimates` is not scheduled: live estimates are written at the check. Run it after a replay.
+5. **Replay labels at each bar close before deciding it**, so the pool at a replayed decision sees exactly what live would have seen. Replay refuses to run while replay candidates on another `rule_hash` exist, because the candidate unique key `(coin, horizon, bar_close, source)` excludes the hash and they would silently block the new rows. `--purge-stale` deletes them (labels cascade) after a backup.
+6. **Phase 1 exit verdict: the machinery is complete but the evidence is not yet in** (see Verification). Phase 1 stays open until live labels arrive.
+
+### Files created or modified
+- `repo/api/app/core/constants.py` - `RULE_VERSION = 'phase1-v7'`; `ESTIMATE_*`, `ABSTAIN_*`, `STATUS_REASON_ABSTAIN_EDGE_BELOW_COST`.
+- `repo/api/app/core/rules/abstain.py` (new) - pure `check_abstain`, `funding_edge_bps`, `cost_edge_r`, `AbstainCheck`, `check_conventions`.
+- `repo/api/app/core/stats/params.py` - estimate inputs alias the hashed constants.
+- `repo/api/app/worker/options_job.py` - `pooled_edge`, `apply_abstain`, `RESULT_ESTIMATE_ERROR`; the estimate is written with the verdict.
+- `repo/api/app/worker/rules_job.py`, `estimates.py` - creation-time estimate write and `fill_safely` removed.
+- `repo/api/app/worker/pipeline.py` (new) - `run_signal_pipeline`, `coins_with_rows`.
+- `repo/api/app/worker/jobs.py`, `scheduler.py`, `config.py`, `.env.example` - `JOB_SIGNAL_PIPELINE`, `signal_pipeline_poll_seconds`.
+- `repo/api/app/worker/replay.py` - per-bar labels, `StaleReplayRows`, `count_stale_replay`, `purge_stale_replay`, `--purge-stale`, `stale_purged` in the summary.
+- `repo/api/app/core/stats/report.py`, `render.py` - `would_abstain` is now a consistency check against the v7 rule (must be 0).
+- `signals-panel.ps1`, `signals-panel-lib.ps1` (workspace root, outside the repo) - worker row with start, stop and reload (`Get-WorkerProcesses`, `Start-SignalsWorker`, `Stop-SignalsWorker`: `taskkill /T`, then `/F` after 20 s).
+- Tests (new): `test_abstain.py`, `test_pipeline.py`. Updated: `test_estimates.py` (write path section rewritten around the options job), `test_replay.py`, `test_stats_report.py`, `test_ingest_config.py` (the worker no-delete guard allows exactly `delete(Candidate)` in `purge_stale_replay`), version and hash pins, scheduled-job counts (7).
+
+### Contracts frozen
+- `check_abstain(*, status, pool_n, expected_r_ci_low, funding_carry_bps, reference_price, stop_price) -> AbstainCheck(abstain, tested, pool_n, expected_r_ci_low, funding_edge_bps, cost_edge_r)`.
+- Status `abstained` with reason `abstain:edge_below_cost`, written only by the options job in the same guarded UPDATE as the verdict.
+- Options job result `estimate_error`: nothing written, retried next run.
+- `job_run.detail` for `signal_pipeline`: `{bar_close, labels{...}, features{written, not_ready, hash_mismatches, ready}, rules{deferred, created, already_present}, options{checked, statuses, estimate_errors, price_mismatches}}`.
+- `python -m app.worker.replay --start ... --end ... [--label-at ...] [--purge-stale]`. Exit 2 with stale rows and no flag.
+
+### Deferred to a later milestone
+- The funding-band edge is not stored on the candidate, so the report's `would_abstain` check uses 0 R (it can miss an alert that a non-zero edge would have stopped; the live rule itself uses the edge).
+- Phase 1 exit: wait for live labels (decision 6).
+- Missed live bars are not back-filled. A replay over the gap would create `replay` rows, not `live` ones.
+
+### Deviations from the plan
+- The handoff said "replay rerun before the first live candidate". The worker was restarted on `f124e80` before the rerun, so the first live candidates (bar 07:45 UTC, 3 alerts) predate the new replay rows. They are on the v7 hash, and live never pools with replay, so nothing is affected.
+- Enrichment is not scheduled (decision 4).
+
+### Verification
+- `cd repo/api; & '.\.venv\Scripts\python.exe' -m pytest -q` -> **`1572 passed, 1 warning in 277s`** (1521 before).
+- Backup of the v6 replay rows: `backups/m10-v6-replay/{candidate,label}.csv` (833 and 817 rows).
+- Replay rerun (`--start 2026-09-04T16:15Z --end 2026-10-05T07:45Z --purge-stale`, 15 coins, 7 workers): 7,693 s, 2,943 bars, `stale_purged=833`, features written 3,060 (present 129,375, not ready 45), 862 candidates, 843 labeled, 19 awaiting bars, 0 errors. Final statuses: alert 192 (188 `options_ignored:no_options_book` + 4 via the options layer), watch 590 (334 `vote_conflict`, 252 `no_options_history`, 4 `snapshot_stale`), cancelled 80 (`cvd_divergence_against`), **abstained 0**: no pool reached 30 at any decision.
+- `stats_job --enrich-estimates`: 865 considered, 0 filled, all `below_floor`; the best pool has 18 independent outcomes.
+- Stats report (`--source replay`): `would_abstain` 0 in every cohort. Full-lookback alts alerts -0.052 R [-0.151, +0.045], n=54 (vs flat: interval includes 0; vs naive -0.125 [-0.177, -0.073], n=134: interval includes the baseline). Thin-lookback alerts +0.141 [+0.032, +0.247], n=70 (thin, so not conclusive). Reliability: 0 bins (no stored P). Kill rule: no live labels, previews `preview_not_yet_applicable`.
+- Live: the worker restarted on `f124e80`; the `signal_pipeline` job has decided every bar from 07:45 UTC (45 feature rows per bar, hourly bars finish on the second tick), with 0 errors. 3 live alerts so far.
+- **Phase 1 exit checks:**
+  1. Labels with decision time, fill time and the three hashes, non-overlapping: met. All 843 have them on a clean `code_version`, none filled before its decision, and every row has a `sample_group_id` (statistics use the first row of each group).
+  2. Reliability diagram hides bins under 20: built and tested (API and report), but empty until a pool reaches 30 and P is stored.
+  3. Expectancy with intervals against always-flat and the swing-break baseline: reported. Not beaten: the full-lookback alert interval includes 0 and the naive mean.
+  4. Kill rule: not binding (0 live labels of the 300 it needs).
+  So Phase 1 is not passed and not failed. It waits on live data.
