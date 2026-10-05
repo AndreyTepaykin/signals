@@ -5,7 +5,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.db import dispose_engine
-from app.routers import health
+from app.routers import (
+    cards,
+    feed_health_router,
+    health,
+    stand_down_router,
+    stats_routes,
+    tracker,
+    ws,
+)
 
 
 @asynccontextmanager
@@ -26,6 +34,12 @@ def create_app() -> FastAPI:
         allow_headers=['*'],
     )
     app.include_router(health.router)
+    app.include_router(cards.router)
+    app.include_router(tracker.router)
+    app.include_router(stats_routes.router)
+    app.include_router(feed_health_router.router)
+    app.include_router(stand_down_router.router)
+    app.include_router(ws.router)
     return app
 
 

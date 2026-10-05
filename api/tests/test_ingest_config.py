@@ -162,9 +162,23 @@ def test_every_deribit_path_is_a_public_endpoint():
     assert all(path.startswith('/api/v2/public/') for path in deribit)
 
 
+def _notify_post_lines(tree: ast.AST) -> set[int]:
+    for node in tree.body:  # type: ignore[attr-defined]
+        if isinstance(node, ast.FunctionDef) and node.name == '_post_ntfy':
+            return {
+                sub.lineno
+                for sub in ast.walk(node)
+                if isinstance(sub, ast.Call)
+                and isinstance(sub.func, ast.Attribute)
+                and sub.func.attr == 'post'
+            }
+    return set()
+
+
 def test_the_worker_has_no_signing_no_keys_and_only_read_verbs():
     problems: list[str] = []
     for path, tree in worker_trees():
+        allowed_posts = _notify_post_lines(tree) if path.name == 'notify.py' else set()
         for node in ast.walk(tree):
             names: list[str] = []
             if isinstance(node, ast.Attribute):
@@ -178,10 +192,15 @@ def test_the_worker_has_no_signing_no_keys_and_only_read_verbs():
             elif isinstance(node, (ast.Import, ast.ImportFrom)):
                 names.extend(alias.name.split('.')[-1] for alias in node.names)
             for name in names:
-                if name.lower() in FORBIDDEN_IDENTIFIERS:
+                low = name.lower()
+                if path.name == 'notify.py' and low == 'post' and node.lineno in allowed_posts:
+                    continue
+                if low in FORBIDDEN_IDENTIFIERS:
                     problems.append(f'{path.name}:{node.lineno} uses {name!r}')
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 if node.value.upper() in {'POST', 'PUT', 'DELETE', 'PATCH'} or node.value.lower() in {'x-mbx-apikey', 'signature'}:
+                    if path.name == 'notify.py' and node.lineno in allowed_posts:
+                        continue
                     problems.append(f'{path.name}:{node.lineno} contains {node.value!r}')
     assert problems == []
 

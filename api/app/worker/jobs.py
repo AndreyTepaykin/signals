@@ -46,6 +46,7 @@ JOB_OPEN_INTEREST = 'binance_open_interest'
 JOB_FUNDING_SETTLED = 'binance_funding_settled'
 JOB_FUNDING_PREDICTED = 'binance_funding_predicted'
 JOB_FEED_HEALTH = 'feed_health'
+JOB_NOTIFY = 'notify'
 JOB_FORCE_ORDER_STREAM = 'binance_force_order_stream'
 LIVE_JOB_NAMES = (
     JOB_KLINES,
@@ -53,6 +54,7 @@ LIVE_JOB_NAMES = (
     JOB_FUNDING_SETTLED,
     JOB_FUNDING_PREDICTED,
     JOB_FEED_HEALTH,
+    JOB_NOTIFY,
     JOB_FORCE_ORDER_STREAM,
 )
 #: The Deribit poller. Separate from `LIVE_JOB_NAMES` / `JOBS`: it exists only when the worker holds a
@@ -79,6 +81,8 @@ class WorkerContext:
     deribit: DeribitClient | None = None
     #: Set on shutdown; jobs poll it between series so stopping is prompt.
     stopping: threading.Event = field(default_factory=threading.Event)
+    #: In-memory notify job state (stand-down transitions, last alert id).
+    notify_state: Any = None
 
 
 @dataclass
@@ -303,6 +307,17 @@ def job_funding_predicted(session: Session, ctx: WorkerContext) -> JobOutcome:
     return outcome
 
 
+def job_notify(session: Session, ctx: WorkerContext) -> JobOutcome:
+    from app.worker import notify as notify_mod
+
+    outcome = JobOutcome()
+    if ctx.notify_state is None:
+        ctx.notify_state = notify_mod.init_notify_state(session)
+    detail = notify_mod.run_notify(session, ctx.settings, ctx.notify_state)
+    outcome.detail.update(detail)
+    return outcome
+
+
 def job_feed_health(session: Session, ctx: WorkerContext) -> JobOutcome:
     """Recompute ``feed_health`` for every gating feed from what is actually stored."""
     outcome = JobOutcome()
@@ -327,6 +342,7 @@ JOBS: dict[str, JobFn] = {
     JOB_FUNDING_SETTLED: job_funding_settled,
     JOB_FUNDING_PREDICTED: job_funding_predicted,
     JOB_FEED_HEALTH: job_feed_health,
+    JOB_NOTIFY: job_notify,
 }
 
 
@@ -338,6 +354,7 @@ def job_intervals(settings: Settings) -> dict[str, int]:
         JOB_FUNDING_SETTLED: settings.feed_funding_settled_poll_seconds,
         JOB_FUNDING_PREDICTED: settings.feed_funding_predicted_poll_seconds,
         JOB_FEED_HEALTH: settings.feed_health_poll_seconds,
+        JOB_NOTIFY: settings.notify_poll_seconds,
     }
 
 def job_deribit_book(session: Session, ctx: WorkerContext) -> JobOutcome:

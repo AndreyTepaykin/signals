@@ -1,17 +1,98 @@
-<main class="shell">
-  <h1>{{ title() }}</h1>
-  <p class="lede">Self-learning crypto signals — local scaffold</p>
+<app-stand-down-banner [state]="standDown()" />
 
-  @if (isLoading()) {
-    <p class="status">Checking API…</p>
-  } @else if (healthError()) {
-    <p class="status error">API health failed: {{ healthError() }}</p>
-    <p class="hint">Start the API from <code>repo\api</code>: <code>.venv\Scripts\uvicorn app.main:app --reload --port 8000</code></p>
-  } @else if (health(); as h) {
-    <p class="status ok">API {{ h.status }}</p>
-    <ul class="meta">
-      <li>Database: {{ h.database }}</li>
-      <li>Postgres: {{ h.postgres }}</li>
-    </ul>
+<header class="toolbar">
+  <span class="ws" [class.ok]="wsConnected()">{{ wsConnected() ? 'WS live' : 'WS reconnecting…' }}</span>
+  <label>
+    Source
+    <select [ngModel]="source()" (ngModelChange)="setSource($event)">
+      <option value="live">live</option>
+      <option value="replay">replay</option>
+    </select>
+  </label>
+  @if (source() === 'replay') {
+    <em class="note">Replay is a backtest; the kill rule does not bind.</em>
   }
+  <label>
+    Status
+    <select [ngModel]="statusFilter()" (ngModelChange)="statusFilter.set($event); cardsOffset.set(0); loadCards()">
+      @for (s of cardStatuses; track s) {
+        <option [value]="s">{{ s || 'all' }}</option>
+      }
+    </select>
+  </label>
+  <label>
+    Coin
+    <input [ngModel]="coinFilter()" (ngModelChange)="coinFilter.set($event); cardsOffset.set(0); loadCards()" placeholder="BTCUSDT" />
+  </label>
+</header>
+
+<main class="grid">
+  <section class="wide">
+    <h2>Signal cards</h2>
+    <div class="pager">
+      <button type="button" (click)="cardsPrev()" [disabled]="cardsOffset() === 0">Prev</button>
+      <span>{{ cardsPageLabel().from }}–{{ cardsPageLabel().to }} of {{ cardsTotal() }}</span>
+      <button type="button" (click)="cardsNext()" [disabled]="cardsOffset() + cardsLimit() >= cardsTotal()">Next</button>
+    </div>
+    @if (cardsEmpty()) {
+      <p>{{ cardsEmpty() }}</p>
+    }
+    @for (c of cards(); track c.id) {
+      <app-signal-card [card]="c" />
+    }
+  </section>
+
+  <section class="wide">
+    <h2>Outcome tracker</h2>
+    <app-tracker-table
+      [rows]="trackerRows()"
+      [total]="trackerTotal()"
+      [offset]="trackerOffset()"
+      [pageSize]="trackerPageSize()"
+      (prev)="trackerPrev()"
+      (next)="trackerNext()"
+    />
+  </section>
+
+  <section class="wide">
+    <h2>Expectancy vs baselines</h2>
+    @if (statsLoading()) {
+      <p>Loading stats (cold cache may take ~20s)…</p>
+    } @else if (expectancyCohorts().length === 0) {
+      <p>No {{ source() }} labels on the current rule hash yet.</p>
+    }
+    <app-expectancy-panel [cohorts]="expectancyCohorts()" />
+  </section>
+
+  <section class="wide">
+    <h2>Reliability</h2>
+    @if (!statsLoading() && calibrationCohorts().length === 0) {
+      <p>No {{ source() }} labels on the current rule hash yet.</p>
+    }
+    <app-reliability-panel [cohorts]="calibrationCohorts()" />
+  </section>
+
+  <section>
+    <h2>Feed health</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Feed</th>
+          <th>Coin</th>
+          <th>Status</th>
+          <th>Staleness</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (f of feedRows(); track f.feed + (f.coin ?? '')) {
+          <tr>
+            <td>{{ f.feed }}</td>
+            <td>{{ f.coin ?? '—' }}</td>
+            <td>{{ f.status }}</td>
+            <td class="mono">{{ f.staleness_seconds ?? '—' }} / {{ f.max_staleness_seconds ?? '—' }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </section>
 </main>

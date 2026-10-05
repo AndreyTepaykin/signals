@@ -166,7 +166,7 @@ def test_the_health_job_after_ingest_reports_every_feed(session, worker_context)
 
 def test_job_intervals_sit_inside_the_spec_one_to_five_minutes():
     intervals = jobs.job_intervals(Settings(_env_file=None, watchlist='BTCUSDT'))
-    assert set(intervals) == set(jobs.JOBS) and len(intervals) == 5
+    assert set(intervals) == set(jobs.JOBS) and len(intervals) == 6
     assert all(60 <= seconds <= 300 for seconds in intervals.values())
 
 
@@ -186,7 +186,7 @@ def test_every_job_is_registered_once_and_cannot_overlap_itself(worker_context):
         assert job.max_instances == 1 and job.coalesce is True
         assert job.trigger.interval == timedelta(seconds=expected[name])
     starts = sorted(job.next_run_time for job in registered.values())
-    assert len(set(starts)) == 5  # staggered, not a thundering herd
+    assert len(set(starts)) == 6  # staggered, not a thundering herd
 
 
 @pytest.fixture

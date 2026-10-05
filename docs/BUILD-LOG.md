@@ -3,7 +3,7 @@
 Handoff log for the Signals build. Each milestone agent **appends exactly one
 entry on completion** (never edits earlier entries; corrections go in your own
 entry's Deviations). Every agent **reads this file and the approved plan
-(`phase_1_signals_loop_*.plan.md`) before starting**, and treats the
+(`C:\Users\User\.cursor\plans\phase_1_signals_loop_*.plan.md`) before starting**, and treats the
 "Contracts frozen" sections below as verbatim API: table names, module paths,
 function signatures and constant names are used exactly as written, not
 re-derived. The spec (`self-learning-crypto-signals.md`) stays the source of
@@ -948,3 +948,61 @@ The four M8 owner questions were decided by the orchestrator at the owner's requ
 - `cd repo/api; & '.\.venv\Scripts\python.exe' -m pytest -q` -> **`1505 passed in 252.74s`** (1428 before), run by the orchestrator. Bugbot on the uncommitted diff: no bugs.
 - Enrichment on `signals` (dry run, then twice for real, identical): 833 candidates considered, 0 filled, 833 `below_floor`. The best pool has 18 independent outcomes (floor 30): pools use full-lookback labels only, and replay has about 10 full-lookback days (233 of 817 labels). So reliability shows 0 bins, Brier is n/a, `would_abstain` is 0.
 - Naive baseline (independent n, E[R], 90% interval): replay/alts/full 123, -0.125 [-0.178, -0.073]; replay/alts/thin 238, +0.013 [-0.048, +0.070]; replay/covered/full 17, -0.029 [-0.188, +0.152] (too small); replay/covered/thin 31, -0.136 [-0.312, +0.035]. App alerts: `no_options_book/full` -0.039 (n=53, interval includes the baseline mean); `no_options_book/thin` +0.141 (n=70). No live rows: no binding kill rule; previews `preview_not_yet_applicable`.
+
+## M9 - API and dashboard
+
+- Date: 2026-10-05
+- Model: Composer 2.5 fast (implementer, three rounds), Claude Opus 5.5 (orchestrator: decided the open choices, reviewed the diff, checked the UI in a browser)
+
+A read-only FastAPI layer over the candidate, label, stats and feed-health tables, a WebSocket that tells the dashboard what changed, an ntfy notifier in the worker, and the Angular dashboard. No hashed value touched (`rule_hash` still `ee25b0d7...`), no migration.
+
+### Decisions (orchestrator, 2026-10-05; the owner delegated them)
+1. **Notification channel = ntfy** (`POST <NTFY_URL>`, optional bearer token). It runs in the worker, which is always on, so it works with the UI and the API closed, and it keeps working from the CX23 without a desktop. Empty `NTFY_URL` = log only. Fires on stand-down start, change (different kinds) and end, and once per new live `alert` candidate.
+2. **Every HTTP route is GET**, plus one WebSocket. No request bodies. Enforced by `route_policy.audit_app_routes` (see Contracts).
+3. **Sync read-only sessions in the API.** The routers reuse the M8 loaders and `stand_down_breaches` (sync) through `stats_job.readonly_session` (DB-level READ ONLY, always rolled back); endpoints are plain `def` and run in FastAPI's threadpool. The async engine stays for `/health` only.
+4. **Stats are cached per source** because a cold build takes about 20 s and the full JSON is about 1.9 MB. One entry per source, rebuilt when `(rule_hash, fingerprint)` changes; fingerprint = label count, max labeled candidate id, max candidate id, count of candidates with a stored P. Concurrent requests build once.
+5. **WebSocket pushes hints, not data** (except the stand-down state). The API polls the fingerprint every `WS_POLL_SECONDS` (15) and pushes `candidates`, `labels`, `stand_down`, `feed_health`; the client re-fetches over REST. Stand-down changes are judged on a stable identity (active, kinds, breached feed/coin pairs, active windows) so a growing staleness does not re-push every poll.
+6. **Cold-start card:** when `pool_n` is NULL or below 30 the API returns `edge_hidden: true`, a reason, and every estimate as null (the numbers are not sent, not just hidden by the UI). NULL reads "no pool reached 30 independent outcomes when this decision was taken" (not "0 of 30": the best pool today is 18).
+7. **Stand-down banner** = feed breaches (`stand_down_breaches` on the live watchlist) + active event windows from `event_calendar`. Perp-vs-spot disagreement is per bar and per candidate, so it stays on the candidate's `status_reason` and not in the banner.
+
+### Files created or modified
+- `repo/api/app/routers/deps.py` (new) - `ReadonlySession` dependency, `SourceQuery` (`live|replay`, default `live`).
+- `repo/api/app/routers/serialize.py` (new) - card helpers: `edge_hidden_block`, `card_action`, `drivers_from_feature` (`DRIVER_FIELDS`), `cost_line`, `vol_bucket`.
+- `repo/api/app/routers/cards.py` (new) - `GET /cards`, `GET /cards/{id}`.
+- `repo/api/app/routers/tracker.py` (new) - `GET /tracker` (candidate + label + left-joined `options_metric`).
+- `repo/api/app/routers/stats_cache.py` (new) - `get_cached_stats`, `fingerprint`, `clear_stats_cache`.
+- `repo/api/app/routers/stats_routes.py` (new) - `GET /stats`, `/stats/expectancy`, `/stats/calibration`, `/stats/baselines`.
+- `repo/api/app/routers/feed_health_router.py`, `stand_down_router.py` (new) - `GET /feed-health`, `GET /stand-down`.
+- `repo/api/app/routers/ws.py` (new) - `WS /ws`; `snapshot_session_factory` and `ws_poll_seconds_override` for tests.
+- `repo/api/app/routers/route_policy.py` (new) - `audit_app_routes`, `FORBIDDEN_PATH_SUBSTRINGS`.
+- `repo/api/app/worker/stand_down.py` (new) - `current_stand_down(session, now) -> StandDownState`, `stand_down_to_dict`.
+- `repo/api/app/worker/notify.py` (new) - `init_notify_state`, `run_notify`, `_post_ntfy`.
+- `repo/api/app/worker/jobs.py`, `scheduler.py` - `JOB_NOTIFY` every `NOTIFY_POLL_SECONDS` (60); state initialised at worker start without sending.
+- `repo/api/app/config.py`, `.env.example` - `ws_poll_seconds`, `ntfy_url`, `ntfy_token`, `notify_poll_seconds`.
+- `repo/api/app/main.py` - routers registered.
+- Tests (new): `test_api_m9.py`, `test_api_ws.py`, `test_api_no_order_routes.py`, `test_stats_cache.py`, `test_serialize_drivers.py`, `test_notify.py`; updated `test_ingest_config.py` (the worker's no-POST guard now allows exactly the `post` call inside `notify._post_ntfy`; every other check still runs on `notify.py`), `test_ingest_jobs.py`, `test_deribit.py` (6 scheduled jobs).
+- `repo/web/src/app/` - dashboard: `app.*`, `components/` (signal card, tracker table, expectancy panel, reliability panel and diagram, stand-down banner), `services/` (`ApiService`, `LiveService` with reconnect), `models/api.types.ts`, `utils/` (format, pagination); `app.spec.ts` 9 tests. `repo/web/proxy.conf.json` - `"ws": true`.
+
+### Contracts frozen
+- Routes (all GET, `source=live|replay`, default `live`): `/cards?status=&coin=&limit=50&offset=0`, `/cards/{id}`, `/tracker?limit=100&offset=0`, `/stats`, `/stats/expectancy`, `/stats/calibration`, `/stats/baselines`, `/feed-health`, `/stand-down`, `WS /ws`. Lists return `{items, total, limit, offset}`. Prices and R values are floats.
+- Card: the options line object has no probability field. `edge_hidden` per decision 6.
+- `/stats/calibration` returns only bins with at least 20 independent outcomes (tested).
+- `audit_app_routes(app)` must return `[]`: HTTP routes GET/HEAD only, exactly one WebSocket route, no request body in OpenAPI, and no path contains `order, trade, position, execut, buy, sell, submit, place, leverage, margin, withdraw, transfer`. It checks the real routes as well as OpenAPI, so a route hidden from the schema cannot escape; a negative test proves it flags `POST /orders` and a hidden `GET /place-order`.
+- WebSocket messages: `hello` (fingerprint + stand-down), then `candidates`, `labels`, `stand_down` (full dict), `feed_health`. Polls the live source only.
+- ntfy: titles `Stand down started|changed|ended`, `Live alert`; priority `high` except the end (`default`). A failed stand-down POST is retried next run; a failed alert POST is logged and skipped.
+
+### Deferred to a later milestone
+- **Restart the live worker** to load `JOB_NOTIFY` (the running process predates it), and set `NTFY_URL` in `repo/api/.env` to a private topic (owner; e.g. `https://ntfy.sh/<long random name>`, subscribe in the ntfy app).
+- Scheduling of the labeler, rules and stats enrichment -> M10. The dashboard shows whatever is in the tables.
+- The stats cache lives in the API process; a cold build blocks one request for about 20 s. A background warm-up was not built.
+- `/stats` serves the full report (~1.9 MB); the dashboard reads the slices only.
+
+### Deviations from the plan
+- The plan's Windows toast / Telegram options were not built; ntfy only (decision 1).
+- First implementer round shipped raw-JSON stats panels, a 4-column tracker, a nearly empty card, a whole-file exemption for `notify.py` in the worker guard test, a segment-only order-path check, and an unbounded stats cache; all sent back and fixed in rounds two and three.
+
+### Verification
+- `cd repo/api; & '.\.venv\Scripts\python.exe' -m pytest -q` -> **`1521 passed, 1 warning in 308.62s`** (1505 before), run by the orchestrator; the M9 test files again after the last wording change: 53 passed. The warning is Starlette's `httpx` deprecation notice in `TestClient`.
+- `rule_hash()` -> `ee25b0d73c1469bef61b85822264d47347adb43a9a090018eb8e151a70605c90` (unchanged).
+- `cd repo/web; npx ng test --watch=false` -> 9 passed; `npm run build` -> `repo/web/dist/web`.
+- Browser check on `npm start` (http://localhost:4200) against the running API: live shows empty states and the feed-health table; replay shows 833 cards, 817 tracker rows, four expectancy cohorts and four reliability cohorts (no bins, Brier n/a, as expected with no stored P). `/stand-down` inactive. The naive baseline for `replay/alts/full` now reads -0.132 [-0.187, -0.077], n=126 (M8.1: -0.125, n=123): the baseline is computed as of now, and three more events have their bars.

@@ -75,6 +75,12 @@ class Settings(BaseSettings):
     database_url: str = 'postgresql+asyncpg://signals:password@127.0.0.1:5432/signals'
     cors_origins: str = 'http://localhost:4200'
 
+    # -- M9 dashboard / notifications ---------------------------------------
+    ws_poll_seconds: int = Field(15, ge=1, le=300)
+    ntfy_url: str = ''
+    ntfy_token: str = ''
+    notify_poll_seconds: int = Field(60, ge=15, le=3600)
+
     # -- watchlist (a Preference, not a frozen rule) ------------------------
     watchlist: str = ','.join(DEFAULT_WATCHLIST)
 

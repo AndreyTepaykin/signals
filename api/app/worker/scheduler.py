@@ -112,6 +112,10 @@ class Worker:
         reaped = reap_orphaned_runs(self.ctx.session_factory)
         if reaped:
             log.warning('closed %d job_run row(s) left running by a previous worker', reaped)
+        from app.worker import notify as notify_mod
+
+        with self.ctx.session_factory() as session:
+            self.ctx.notify_state = notify_mod.init_notify_state(session)
         self.scheduler.start()
         if self.stream is not None:
             self.stream.start()
