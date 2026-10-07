@@ -74,6 +74,50 @@ def test_connection_errors_are_retried():
     assert http.get('/x') == [2]
 
 
+def test_pool_timeout_on_an_injected_client_retries_without_closing_it():
+    script = Script(httpx.PoolTimeout('wedged'), ok([9]))
+    http, sleeper = make_http(script)
+    assert http.get('/x') == [9]
+    assert script.calls == 2 and sleeper.calls == [1.0]
+    assert not http._client.is_closed
+
+
+def test_pool_timeout_replaces_the_owned_client_before_the_retry():
+    """A wedged pool never recovers. The next attempt must use a new client."""
+    script = Script(httpx.PoolTimeout('wedged'), ok([9]))
+    opened: list[httpx.Client] = []
+
+    def factory() -> httpx.Client:
+        client = httpx.Client(transport=httpx.MockTransport(script))
+        opened.append(client)
+        return client
+
+    http = BinanceHttp(
+        'https://www.deribit.com',
+        weight_limit_1m=120,
+        client_factory=factory,
+        retry=FAST_RETRY,
+        sleep=Sleeper(),
+        rand=lambda: 0.5,
+    )
+    try:
+        assert http.get('/api/v2/public/get_book_summary_by_currency') == [9]
+        assert script.calls == 2 and len(opened) == 2
+        assert opened[0].is_closed and http._client is opened[1] and not opened[1].is_closed
+    finally:
+        http.close()
+
+
+def test_owned_client_gives_up_on_the_pool_quickly_and_still_waits_on_the_socket():
+    http = BinanceHttp('https://fapi.test', weight_limit_1m=100)
+    try:
+        timeout = http._client.timeout
+        assert timeout.pool == 1.0
+        assert timeout.connect == 10.0 and timeout.read == 10.0
+    finally:
+        http.close()
+
+
 def test_an_undecodable_200_body_is_retried():
     script = Script(httpx.Response(200, text='<html>gateway</html>'), ok([3]))
     http, _ = make_http(script)

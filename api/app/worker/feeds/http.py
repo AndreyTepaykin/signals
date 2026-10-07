@@ -13,7 +13,11 @@ What actually breaks ingest, and what this module does about it:
   ban lifts rather than hammering a banned endpoint.
 * **5xx, timeouts, connection resets, undecodable bodies.** Retried with
   exponential backoff and jitter, up to a bound, then surfaced as
-  :class:`BinanceUnavailable`.
+  :class:`BinanceUnavailable`. A ``PoolTimeout`` means no connection was free
+  within :data:`POOL_ACQUIRE_TIMEOUT`. A healthy pool hands one out immediately,
+  so this is a wedged pool (connections stuck checked-out); the client this
+  object owns is closed and replaced before the next attempt. Retrying against
+  the same pool never recovers it.
 * **HTTP 451** (geo-block, e.g. a US IP) and **403** (WAF) are not retried. 451
   is a deployment fact, not a transient fault: the spec puts the VPS in
   Germany or Finland for exactly this reason.
@@ -43,6 +47,9 @@ FUTURES_WEIGHT_LIMIT_1M = 2400
 SPOT_WEIGHT_LIMIT_1M = 6000
 #: Stay under this fraction of a limit before sleeping.
 SOFT_LIMIT_FRACTION = 0.8
+#: How long to wait for a free connection. Assignment on a healthy pool is
+#: immediate; a longer wait only delays noticing that every connection is stuck.
+POOL_ACQUIRE_TIMEOUT = 1.0
 
 
 class BinanceError(Exception):
@@ -158,6 +165,7 @@ class BinanceHttp:
         *,
         weight_limit_1m: int,
         client: httpx.Client | None = None,
+        client_factory: Callable[[], httpx.Client] | None = None,
         retry: RetryPolicy | None = None,
         timeout: float = 10.0,
         sleep: Callable[[float], None] = time.sleep,
@@ -166,8 +174,11 @@ class BinanceHttp:
         extra_windows: Mapping[str, SlidingWindow] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip('/')
-        self._client = client or httpx.Client(timeout=timeout, headers={'User-Agent': 'signals-worker/0.1'})
+        self._timeout = timeout
+        self._client_lock = threading.Lock()
+        self._client_factory = client_factory or self._open_client
         self._owns_client = client is None
+        self._client = self._client_factory() if client is None else client
         self.retry = retry or RetryPolicy()
         self._sleep, self._monotonic, self._rand = sleep, monotonic, rand
         self.weight = SlidingWindow(weight_limit_1m, 60.0, monotonic=monotonic, sleep=sleep)
@@ -176,9 +187,31 @@ class BinanceHttp:
         self._blocked_until: float = 0.0
         self.request_count = 0
 
+    def _open_client(self) -> httpx.Client:
+        return httpx.Client(
+            timeout=httpx.Timeout(self._timeout, pool=POOL_ACQUIRE_TIMEOUT),
+            headers={'User-Agent': 'signals-worker/0.1'},
+        )
+
     def close(self) -> None:
         if self._owns_client:
             self._client.close()
+
+    def _discard_wedged_pool(self, failed: httpx.Client) -> str:
+        """Drop ``failed`` when this object owns it, so the next attempt opens a fresh pool.
+
+        An injected client is left alone: the caller owns its lifetime. Closing is done
+        outside the swap lock so a concurrent request can already be using the replacement.
+        """
+        summary = _pool_summary(failed)
+        if not self._owns_client:
+            return f'connection pool exhausted ({summary})'
+        with self._client_lock:
+            if self._client is not failed:
+                return f'connection pool exhausted ({summary}); client already replaced'
+            self._client = self._client_factory()
+        failed.close()
+        return f'connection pool exhausted ({summary}); replaced the client'
 
     # -- ban state -------------------------------------------------------
     def _check_ban(self) -> None:
@@ -211,8 +244,22 @@ class BinanceHttp:
             for name in windows:
                 self.windows[name].acquire(1)
             self.request_count += 1
+            client = self._client
             try:
-                response = self._client.get(self.base_url + path, params=dict(params or {}))
+                response = client.get(self.base_url + path, params=dict(params or {}))
+            except httpx.PoolTimeout as exc:
+                # PoolTimeout is a TimeoutException. Handle it before the general transport retry:
+                # another attempt on this same client would wait out the pool timeout again.
+                last_error = exc
+                log.warning(
+                    '%s transport error (PoolTimeout) attempt %d/%d; %s',
+                    path,
+                    attempt,
+                    self.retry.max_attempts,
+                    self._discard_wedged_pool(client),
+                )
+                self._backoff(attempt)
+                continue
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 last_error = exc
                 log.warning('%s transport error (%s) attempt %d/%d', path, type(exc).__name__, attempt, self.retry.max_attempts)
@@ -292,3 +339,11 @@ class BinanceHttp:
         if code == -1121:
             return SymbolNotFound(status, code, message, path=path)
         return BinanceAPIError(status, code, message, path=path)
+
+
+def _pool_summary(client: httpx.Client) -> str:
+    """``ConnectionPool`` repr (active/idle counts), or a placeholder if the transport has none."""
+    try:
+        return repr(client._transport._pool)  # type: ignore[attr-defined]
+    except AttributeError:
+        return 'pool unavailable'
