@@ -337,19 +337,19 @@ def compute_features(inputs: FeatureInputs, policy: HistoryPolicy = PRODUCTION_P
     raw['session_bucket'] = info.bucket
     raw['session_date'] = info.session_date
     raw['is_weekend'] = is_weekend(t)
-    if inputs.calendar_loaded:
-        windowed = [
-            (event.kind, event.event_time)
-            for event in inputs.events
-            if event.available_at <= t
-            and event.kind in C.EVENT_WINDOW_MINUTES
-            and not (event.kind == C.EVENT_KIND_EXPIRY and event.is_large is False)
-        ]
-        active = active_event_windows(t, windowed)
+    windowed = [
+        (event.kind, event.event_time)
+        for event in inputs.events
+        if event.available_at <= t
+        and event.kind in C.EVENT_WINDOW_MINUTES
+        and not (event.kind == C.EVENT_KIND_EXPIRY and event.is_large is False)
+    ]
+    active = active_event_windows(t, windowed)
+    if active or inputs.calendar_loaded:
         raw['event_flag'] = bool(active)
         raw['active_event_kinds'] = sorted({event.kind for event in active})
     else:
-        put_many(('event_flag', 'active_event_kinds'), 'no calendar rows are loaded, so "no event" cannot be asserted')
+        put_many(('event_flag', 'active_event_kinds'), 'no CPI or FOMC row is loaded, so "no event" cannot be asserted')
 
     # ---- stand-down input ---------------------------------------------------
     if atr is not None:

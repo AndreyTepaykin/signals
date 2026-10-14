@@ -16,9 +16,9 @@ Import contract
   have. ``--available-at`` sets an earlier knowledge time (a date published in advance); replay then sees the row from
   that instant. It may not be in the future.
 * Stand-down kinds (``cpi``, ``fomc``, ``expiry``) are refused without ``--allow-stand-down-kinds``.
-* While the table holds no row at all, a real import is refused without ``--allow-event-flag-flip``: the first row of
-  ANY kind turns ``feature_row.event_flag`` from NULL into FALSE for every coin (``read_calendar`` in
-  ``app.worker.feature_job`` only asks whether some row is visible).
+* A file that brings the first CPI or FOMC row is refused without ``--allow-event-flag-flip``: that row makes the
+  calendar 'loaded' (``E.CALENDAR_LOADED_KINDS``), so ``feature_row.event_flag`` turns from NULL into FALSE for every
+  coin. Unlock and expiry rows alone leave it NULL.
 * ``--dry-run`` validates and counts inside a READ ONLY transaction and writes nothing.
 
 ``--coverage`` is read-only (``SET TRANSACTION READ ONLY``): for every watchlist coin except BTC and ETH it reports the
@@ -66,14 +66,15 @@ STAND_DOWN_EXPLANATION = (
     'inside its window (cpi/fomc 30 min either side, expiry 15 min; an expiry with is_large=false never windows, an '
     'empty is_large counts as large) for EVERY coin, because feature assembly ignores the row\'s coin; the rules then '
     'cancel those candidates with stand_down:event_window, and the dashboard banner and ntfy announce the window. '
-    'Like any calendar row it also makes event_flag read FALSE ("no event") instead of NULL ("unknown") on later '
-    'feature rows, which changes their feature_hash and their event_flag pool cell. Pass --allow-stand-down-kinds '
+    'The first cpi or fomc row also makes event_flag read FALSE ("no event") instead of NULL ("unknown") outside '
+    'the windows on later feature rows, which changes their feature_hash and their event_flag pool cell (an expiry '
+    'row alone only sets TRUE inside its window). Pass --allow-stand-down-kinds '
     'only for dates from a source you trust.'
 )
 EVENT_FLAG_FLIP_EXPLANATION = (
-    'event_calendar holds no row yet. The first row of ANY kind, an unlock included, makes event_flag / '
+    'event_calendar holds no CPI or FOMC row yet. The first one makes the calendar loaded: event_flag / '
     'active_event_kinds read FALSE / [] ("no event") instead of NULL ("unknown") on every feature row whose bar '
-    'closes at or after its available_at, for every coin, although no CPI or FOMC date is loaded. That changes '
+    'closes at or after its available_at, for every coin, outside the event windows. That changes '
     'feature_hash on those rows (rule_hash does not change) and moves their candidates and labels from the '
     'event_flag=unknown pool cell to event_flag=False. Stand-down does not change: unknown does not stand down '
     'either. Pass --allow-event-flag-flip to accept this.'
@@ -298,9 +299,19 @@ def resolve_available_at(raw: str | None, now: datetime) -> datetime:
 # ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------
-def calendar_has_rows(session: Session) -> bool:
-    """Whether any row is stored, whatever its ``available_at``."""
-    return session.execute(as_of(EVERY_STORED_ROW).select(EventCalendar.id).limit(1)).first() is not None
+def calendar_has_rows(session: Session, kinds: Sequence[str] | None = None) -> bool:
+    """Whether any row (of ``kinds``, when given) is stored, whatever its ``available_at``."""
+    statement = as_of(EVERY_STORED_ROW).select(EventCalendar.id)
+    if kinds is not None:
+        statement = statement.where(EventCalendar.kind.in_(kinds))
+    return session.execute(statement.limit(1)).first() is not None
+
+
+def would_flip_event_flag(session: Session, rows: Sequence[CalendarRow]) -> bool:
+    """The file brings the first CPI or FOMC row, which makes the calendar 'loaded' for feature assembly."""
+    if not any(row.kind in E.CALENDAR_LOADED_KINDS for row in rows):
+        return False
+    return not calendar_has_rows(session, E.CALENDAR_LOADED_KINDS)
 
 
 def stored_keys(session: Session, rows: Sequence[CalendarRow]) -> set[CalendarKey]:
@@ -464,15 +475,15 @@ def _run_import(args: argparse.Namespace) -> int:
 
     if args.dry_run:
         with readonly_session(get_sync_engine()) as session:
-            empty = not calendar_has_rows(session)
+            flips = would_flip_event_flag(session, parsed.rows)
             report = import_rows(session, parsed.rows, available_at=available_at, dry_run=True)
-        if empty and parsed.rows and not args.allow_event_flag_flip:
+        if flips and not args.allow_event_flag_flip:
             print('NOTE: a real run would be refused without --allow-event-flag-flip. ' + EVENT_FLAG_FLIP_EXPLANATION)
         print(f'would insert {report.inserted}, already present {report.already_present}')
         return 0
 
     with get_sync_session_factory()() as session:
-        if parsed.rows and not calendar_has_rows(session) and not args.allow_event_flag_flip:
+        if would_flip_event_flag(session, parsed.rows) and not args.allow_event_flag_flip:
             print(EVENT_FLAG_FLIP_EXPLANATION, file=sys.stderr)
             print('nothing written.', file=sys.stderr)
             return 1
@@ -507,7 +518,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         '--allow-event-flag-flip',
         action='store_true',
-        help='with --file: accept loading the first calendar row (event_flag turns from NULL to FALSE)',
+        help='with --file: accept loading the first CPI or FOMC row (event_flag turns from NULL to FALSE)',
     )
     parser.add_argument('--available-at', help='with --file: earlier knowledge time, ISO 8601 with offset (default: now)')
     parser.add_argument('--days', type=int, default=DEFAULT_COVERAGE_DAYS, help='with --coverage: look-ahead window')

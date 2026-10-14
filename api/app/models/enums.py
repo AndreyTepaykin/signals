@@ -66,6 +66,9 @@ EVENT_KIND_UNLOCK = 'unlock'
 EVENT_KIND_FUNDING_SETTLEMENT = 'funding_settlement'
 SLICE_ONLY_EVENT_KINDS = (EVENT_KIND_UNLOCK, EVENT_KIND_FUNDING_SETTLEMENT)
 EVENT_KINDS = STAND_DOWN_EVENT_KINDS + SLICE_ONLY_EVENT_KINDS
+#: The calendar counts as loaded (``event_flag`` FALSE instead of NULL "unknown") only once a macro row is visible.
+#: Unlocks or expiries alone cannot claim "no event" for CPI and FOMC (owner, 2026-10-14).
+CALENDAR_LOADED_KINDS = (C.EVENT_KIND_CPI, C.EVENT_KIND_FOMC)
 
 #: Spec: "Directional sources vote on Long / Short / Watch." A candidate always
 #: has a direction; ``watch`` is a status, not a direction.

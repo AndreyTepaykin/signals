@@ -199,14 +199,18 @@ def test_calendar_has_rows_sees_rows_whatever_their_available_at(session):
     assert CI.calendar_has_rows(session) is True
 
 
-def test_an_unlock_row_alone_makes_the_calendar_loaded_for_every_coin(session):
-    """Documents the finding the --allow-event-flag-flip guard is for: assembly only asks whether any row is visible."""
+def test_only_a_cpi_or_fomc_row_makes_the_calendar_loaded(session):
     bar = NOW + timedelta(hours=1)
     assert read_calendar(session, bar) == ([], False)
     CI.import_rows(session, rows(UNLOCK), available_at=NOW)
+    assert read_calendar(session, bar) == ([], False)  # an unlock alone leaves event_flag unknown
+    assert CI.would_flip_event_flag(session, rows(UNLOCK)) is False
+    assert CI.would_flip_event_flag(session, rows(CPI)) is True
+    CI.import_rows(session, rows(CPI), available_at=NOW)
     events, loaded = read_calendar(session, bar)
     assert loaded is True and events == []
     assert read_calendar(session, NOW - timedelta(minutes=15)) == ([], False)
+    assert CI.would_flip_event_flag(session, rows('fomc,,2026-12-09T19:00:00+00:00,,,FOMC,fed')) is False
 
 
 def test_read_unlocks_is_gated_and_skips_other_kinds(session):

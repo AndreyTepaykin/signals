@@ -59,8 +59,8 @@ Private paper-only crypto signals loop on the Win10 laptop: ingest → features 
 ## Open
 
 - M3.1 Ambiguity 1: the state is measured against the last confirmed swing, so a new swing that forms after the break can end it early. Revisit if replay shows it matters.
-- **Thin-lookback cutoff (owner).** `ESTIMATE_THIN_LOOKBACK_CUTOFF_UTC = 2026-09-24` (hashed) still marks every 2026 replay bar before it as `thin`, though the Vision import gave those bars a full feature window. 1,220 independent replay alts alerts therefore never feed pools, the kill-rule preview or a `full` fold set. Moving it changes `rule_hash` and needs the 36 h replay again (`--purge-stale` after a backup).
-- **"Calendar loaded" (owner).** Any `event_calendar` row, an unlock included, flips `event_flag` from NULL to FALSE for every coin. Decide whether only stand-down kinds should count before loading unlocks; the importer refuses the first load without `--allow-event-flag-flip`.
+- **Thin-lookback cutoff stays at 2026-09-24 (owner, 2026-10-14).** The January-September replay stays `thin`; its 1,220 independent alts alerts never feed pools, the kill-rule preview or a `full` fold set.
+- **Calendar loaded = a CPI or FOMC row is visible (owner, 2026-10-14).** Unlocks never change `event_flag`; a visible expiry window sets it TRUE; FALSE outside windows needs CPI/FOMC loaded. The importer asks for `--allow-event-flag-flip` only on the first CPI/FOMC load.
 - M1's `promotion_log` is superseded by `promotion_decision` and unused.
 
 ## Key files
@@ -106,7 +106,7 @@ Subagents don't see the chat. Each brief must name the milestone, point to this 
 
 1. **Keep the live worker running** (`python -m app.worker`, or the Worker row in `signals-panel.ps1`). It decides every live bar; a bar missed while it is down is never decided, and every day down loses Deribit OI for good. Phase 2 cannot start before the live cohorts reach 300 independent labels (about 6 weeks for alts at the current rate, months for BTC/ETH).
 2. **Phase 1 exit: not passed, not failed; waiting on live labels.** Labels and hashes: met. Reliability diagram: built, empty until a pool reaches 30. Expectancy: the 2026 replay did not beat the naive break (numbers in the P2.0 entry). Kill rule: live 59 of 300 (alts), 15 of 300 (options layer). Recheck with `python -m app.worker.stats_job --source live`.
-3. **Owner decisions** (see Open): the thin-lookback cutoff, what "calendar loaded" means, and confirm the options thresholds stay (12-month Tardis check found no reason to move them).
+3. **Reload the worker** (panel) before loading any calendar rows, so it runs the new "calendar loaded" rule. With the calendar still empty, nothing differs until then.
 4. **Owner data:** fill `repo/api/data/calendar/events_template.csv` with unlock dates for the 13 alts (and CPI/FOMC when ready) from a trusted source, then `python -m app.worker.calendar_import --file ... --dry-run`, then the real run with the flags it asks for. Check with `--coverage`. Unlocks are required before alts leave the book in Phase 2.
 5. **Owner:** set `NTFY_URL=https://ntfy.sh/<long random topic>` in `repo/api/.env` and subscribe in the ntfy app, then reload the worker (panel). Until then live alerts only log.
 6. **Phase 2 tooling, read-only until the floor:** `python -m app.worker.walk_forward_job --source live` (fold sets and `fit allowed`), `python -m app.worker.promotion_job --all --source live` (shadow gate; add `--record` to log verdicts to `promotion_decision`). No model is fitted anywhere; LightGBM is not installed.

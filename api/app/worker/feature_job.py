@@ -180,17 +180,20 @@ def read_force_orders(session: Session, coin: str, bar_close: datetime) -> list[
 
 
 def read_calendar(session: Session, bar_close: datetime) -> tuple[list[CalendarEvent], bool]:
-    """Events within a day of the bar, and whether the calendar holds any visible row at all."""
+    """Visible events within a day of the bar, and whether the calendar is loaded (a CPI or FOMC row is visible)."""
     reader = as_of(bar_close)
-    loaded = session.execute(reader.select(EventCalendar.id).limit(1)).first() is not None
-    if not loaded:
-        return [], False
+    loaded = (
+        session.execute(
+            reader.select(EventCalendar.id).where(EventCalendar.kind.in_(E.CALENDAR_LOADED_KINDS)).limit(1)
+        ).first()
+        is not None
+    )
     statement = reader.select(EventCalendar).where(
         EventCalendar.event_time >= bar_close - timedelta(days=1),
         EventCalendar.event_time <= bar_close + timedelta(days=1),
     )
     rows = session.execute(statement.order_by(EventCalendar.event_time, EventCalendar.id)).scalars().all()
-    return [CalendarEvent(r.kind, r.event_time, r.available_at, r.is_large) for r in rows], True
+    return [CalendarEvent(r.kind, r.event_time, r.available_at, r.is_large) for r in rows], loaded
 
 
 def load_inputs(

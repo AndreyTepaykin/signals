@@ -45,7 +45,7 @@ class PreloadedCoinFeeds:
     funding_settled: list[FundingPrint]
     force_orders: list[ForcePrint]
     calendar_events: list[CalendarEvent]
-    calendar_available_at: list[datetime]
+    calendar_available_at: list[datetime]  # of the CPI / FOMC rows only: they decide when the calendar is loaded
 
 
 def _bars_for_bar(all_bars: list[Bar], bar_close: datetime) -> list[Bar]:
@@ -73,8 +73,6 @@ def _calendar_loaded(preloaded: PreloadedCoinFeeds, bar_close: datetime) -> bool
 
 
 def _calendar_for_bar(preloaded: PreloadedCoinFeeds, bar_close: datetime) -> tuple[list[CalendarEvent], bool]:
-    if not _calendar_loaded(preloaded, bar_close):
-        return [], False
     lo = bar_close - timedelta(days=1)
     hi = bar_close + timedelta(days=1)
     events = [
@@ -82,7 +80,7 @@ def _calendar_for_bar(preloaded: PreloadedCoinFeeds, bar_close: datetime) -> tup
         for e in preloaded.calendar_events
         if e.available_at <= bar_close and lo <= e.event_time <= hi
     ]
-    return events, True
+    return events, _calendar_loaded(preloaded, bar_close)
 
 
 def preload_replay_feeds(
@@ -239,9 +237,9 @@ def _read_force_bulk(session, gate_end: datetime, coin: str, traded_min: datetim
 
 def _read_calendar_bulk(session, gate_end: datetime, lo: datetime, hi: datetime) -> tuple[list[CalendarEvent], list[datetime]]:
     reader = as_of(gate_end)
-    all_visible = session.execute(reader.select(EventCalendar.available_at)).scalars().all()
-    if not all_visible:
-        return [], []
+    loaded_at = session.execute(
+        reader.select(EventCalendar.available_at).where(EventCalendar.kind.in_(E.CALENDAR_LOADED_KINDS))
+    ).scalars().all()
     statement = reader.select(EventCalendar).where(EventCalendar.event_time >= lo, EventCalendar.event_time <= hi)
     rows = session.execute(statement.order_by(EventCalendar.event_time, EventCalendar.id)).scalars().all()
-    return [CalendarEvent(r.kind, r.event_time, r.available_at, r.is_large) for r in rows], list(all_visible)
+    return [CalendarEvent(r.kind, r.event_time, r.available_at, r.is_large) for r in rows], list(loaded_at)

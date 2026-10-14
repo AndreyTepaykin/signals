@@ -1100,9 +1100,11 @@ Clears the M7/M10 loose ends and builds the Phase 2 machinery that does not need
 - `python -m app.worker.calendar_import --file PATH.csv [--dry-run] [--allow-stand-down-kinds] [--allow-event-flag-flip] [--available-at ISO]`; `--coverage [--days N]` (read-only).
 - CSV columns: `kind,coin,event_time,is_large,notional_usd,title,feed_source` (`feed_source` required).
 
-### Deferred / owner decisions
-- **Thin-lookback cutoff.** `ESTIMATE_THIN_LOOKBACK_CUTOFF_UTC` (hashed) still puts every bar before 2026-09-24 in `thin`, though the Vision import gave the 2026 replay a full feature window. So 1,220 independent alts alerts never feed pools, the kill-rule preview or a fold set marked full. Moving it changes `rule_hash` and needs the 36 h replay again.
-- **What "calendar loaded" means** (any row vs only stand-down kinds): changing it changes feature values (not `rule_hash`).
+### Owner decisions (2026-10-14, after the first commit)
+- **Thin-lookback cutoff stays** at 2026-09-24 (`ESTIMATE_THIN_LOOKBACK_CUTOFF_UTC`, hashed). The January-September replay stays in `thin`: its 1,220 independent alts alerts never feed pools, the kill-rule preview or a `full` fold set.
+- **The calendar is loaded only once a CPI or FOMC row is visible** (`E.CALENDAR_LOADED_KINDS`, in `enums.py`, not hashed). `feature_job.read_calendar` and `replay_feeds` now return the visible events whatever the loaded state. `assemble` sets `event_flag` TRUE inside any visible window (an expiry alone included, so candidates and the stand-down banner agree), FALSE outside windows only when loaded, else NULL. Unlock rows never change `event_flag`. The importer's `--allow-event-flag-flip` guard applies only to a file that brings the first CPI or FOMC row (`would_flip_event_flag`). With today's empty calendar, every feature value is unchanged. Tests: `test_a_known_window_flags_the_bar_before_the_macro_calendar_is_loaded`, `test_only_a_cpi_or_fomc_row_makes_the_calendar_loaded`; suite **1671 passed**.
+
+### Deferred
 - **Unlock dates** for the 13 alts, and CPI/FOMC dates: owner fills `data/calendar/events_template.csv` from a trusted source.
 - `NTFY_URL` still empty.
 - M3.1 ambiguity 1 still open.

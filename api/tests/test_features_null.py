@@ -198,6 +198,15 @@ def test_an_empty_calendar_is_unknown_not_no_event(alt):
     assert hidden.values['event_flag'] is False
 
 
+def test_a_known_window_flags_the_bar_before_the_macro_calendar_is_loaded(alt):
+    expiry = CalendarEvent(C.EVENT_KIND_EXPIRY, END + timedelta(minutes=5), END - timedelta(days=2), True)
+    flagged = compute_features(replace(alt, calendar_loaded=False, events=(expiry,)))
+    assert flagged.values['event_flag'] is True and flagged.values['active_event_kinds'] == [C.EVENT_KIND_EXPIRY]
+    far = CalendarEvent(C.EVENT_KIND_EXPIRY, END + timedelta(hours=6), END - timedelta(days=2), True)
+    outside = compute_features(replace(alt, calendar_loaded=False, events=(far,)))
+    _null(outside, 'event_flag', 'active_event_kinds')  # outside a window, "no event" still needs CPI / FOMC
+
+
 def test_no_force_orders_gives_an_empty_shadow_bag_not_zeros(base):
     assert base.values['shadow_metrics'] == {}
     assert base.reasons.get('shadow_metrics')
