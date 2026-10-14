@@ -350,8 +350,16 @@ def assemble_feature_rows(
             raise InputsNotReady(absent)
         log.warning('%s %s: writing with absent inputs: %s', coin, bar_close.isoformat(), '; '.join(absent))
 
+    shared = None
     for horizon, inputs in inputs_by_horizon.items():
-        computation = compute_features(inputs, policy)
+        # Replay never has predicted funding, and that is the only feature that
+        # depends on the horizon. One computation then fills every horizon.
+        if shared is not None and inputs.funding_predicted is None:
+            computation = shared
+        else:
+            computation = compute_features(inputs, policy)
+            if inputs.funding_predicted is None:
+                shared = computation
         report.null_reasons = {**computation.reasons}
         values = row_values(coin, horizon, bar_close, source, computation, version)
         inserted = session.execute(
