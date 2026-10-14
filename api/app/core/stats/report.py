@@ -239,7 +239,8 @@ class WouldAbstain:
     The abstain rule (M10, ``app.core.rules.abstain``) turns an alert into ``abstained`` when its pool has >= 30
     independent outcomes and the interval's lower bound is below the funding band's adverse edge in R. That edge is never
     negative, so an alert with such a pool and ``expected_r_ci_low < 0`` (or no interval) should not exist under the
-    current rule hash; a non-zero count here is a bug. The funding edge itself is not stored, so it is not re-tested.
+    current rule hash; a non-zero count here is a bug. The edge is the rule's own (`Observation.abstain_cost_edge_r`,
+    re-derived from the stored feature row by the loader); a row without it is tested against 0 R.
     """
 
     alerts: int
@@ -251,14 +252,22 @@ class WouldAbstain:
     cost_basis: str
 
 
-COST_BASIS = 'interval lower bound below 0 R (stored R is net of fees and funding; the funding-band edge is not stored)'
+COST_BASIS = (
+    'interval lower bound below the funding-band edge in R, re-derived from the stored feature row (0 R when it cannot'
+    ' be); stored R is already net of fees and funding'
+)
 
 
 def would_abstain(alerts: Sequence[Observation]) -> WouldAbstain:
+    def below_cost(o: Observation) -> bool:
+        if o.expected_r_ci_low is None:
+            return C.ABSTAIN_WITHOUT_INTERVAL
+        return o.expected_r_ci_low < (o.abstain_cost_edge_r or 0.0)
+
     def counted(rows: Sequence[Observation]) -> tuple[int, int, int]:
         filled = [o for o in rows if not o.is_no_entry]
         with_estimate = [o for o in filled if o.pool_n is not None and o.pool_n >= C.ABSTAIN_MIN_POOL_INDEPENDENT]
-        abstain = [o for o in with_estimate if o.expected_r_ci_low is None or o.expected_r_ci_low < 0.0]
+        abstain = [o for o in with_estimate if below_cost(o)]
         return len(filled), len(with_estimate), len(abstain)
 
     raw = counted(alerts)

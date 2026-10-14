@@ -12,14 +12,25 @@ behavioural test in ``test_schema_constraints.py``.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from alembic.autogenerate import compare_metadata
+from alembic.config import Config
 from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 
 from app.models.base import Base
 
-EXPECTED_TABLE_COUNT = 13  # plus alembic_version
+EXPECTED_TABLE_COUNT = 14  # plus alembic_version
+API_ROOT = Path(__file__).resolve().parents[1]
+
+
+def script_head() -> str:
+    config = Config()
+    config.set_main_option('script_location', str(API_ROOT / 'alembic'))
+    return ScriptDirectory.from_config(config).get_current_head()
 
 
 @pytest.fixture
@@ -30,6 +41,9 @@ def migration_diff(db_engine):
         ).scalar()
         if not at_head or 'candle' not in inspect(connection).get_table_names(schema='public'):
             pytest.skip('public schema is not at Alembic head; run `python -m alembic upgrade head`')
+        current = connection.execute(text('SELECT version_num FROM public.alembic_version')).scalar()
+        if current != script_head():
+            pytest.skip(f'public is at {current}, the scripts at {script_head()}; run `python -m alembic upgrade head`')
         context = MigrationContext.configure(
             connection,
             opts={'compare_type': True, 'include_schemas': False},

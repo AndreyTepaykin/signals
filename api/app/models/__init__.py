@@ -22,6 +22,8 @@ One module per concern:
     Resolved outcomes, including the label-only columns.
 ``observability``
     Job runs and the promotion gate's decision log.
+``promotion``
+    The append-only promotion-gate decision log written by ``promotion_job --record`` (Phase 2 prep).
 ``as_of``
     The available-at read gate. Every feed read goes through it.
 
@@ -40,6 +42,7 @@ from app.models.feeds import Candle, EventCalendar, FeedHealth, ForceOrder, Fund
 from app.models.labels import LABEL_ONLY_COLUMNS, MFE_DIAGNOSTIC_COLUMNS, Label
 from app.models.observability import JobRun, PromotionLog
 from app.models.options import OptionsMetric, OptionsSnapshot
+from app.models.promotion import PromotionDecision
 
 metadata = Base.metadata
 
@@ -64,6 +67,7 @@ __all__ = [
     'OpenInterest',
     'OptionsMetric',
     'OptionsSnapshot',
+    'PromotionDecision',
     'PromotionLog',
     'as_of',
     'enums',

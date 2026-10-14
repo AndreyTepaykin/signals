@@ -141,6 +141,10 @@ class Observation:
     fees_r: float | None = None  # round-trip fees + slippage in R (label.fees_r); NULL on a no_entry label
     pool_n: int | None = None
     expected_r_ci_low: float | None = None
+    # Phase 2 prep: the 1-in-5 locked book (candidate.locked_book) and the abstain rule's cost edge in R, recomputed from
+    # the stored feature row for an alert whose pool reached the abstain floor (NULL otherwise)
+    locked_book: bool | None = None
+    abstain_cost_edge_r: float | None = None
 
     @property
     def options_path(self) -> str:

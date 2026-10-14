@@ -236,10 +236,21 @@ def test_the_worker_has_no_signing_no_keys_and_only_read_verbs():
 def test_every_http_call_in_the_worker_is_one_httpx_get_inside_binancehttp():
     verbs = []
     for path, tree in worker_trees():
+        # local names bound to the client (``client = self._client``) count as the client too
+        aliases = {
+            target.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Attribute) and node.value.attr == '_client'
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 receiver = node.func.value
-                if node.func.attr in {'get', 'post', 'put', 'delete', 'patch', 'request', 'send', 'stream'} and isinstance(receiver, ast.Attribute) and receiver.attr == '_client':
+                is_client = (isinstance(receiver, ast.Attribute) and receiver.attr == '_client') or (
+                    isinstance(receiver, ast.Name) and receiver.id in aliases
+                )
+                if node.func.attr in {'get', 'post', 'put', 'delete', 'patch', 'request', 'send', 'stream'} and is_client:
                     verbs.append((path.name, node.func.attr))
     assert verbs == [('http.py', 'get')]  # the one egress point in the whole worker: a GET
 

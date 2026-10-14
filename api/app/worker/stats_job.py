@@ -28,8 +28,12 @@ from typing import Any
 from sqlalchemy import Engine, func, select, text
 from sqlalchemy.orm import Session
 
+from app.core import constants as C
 from app.core.hashing import rule_hash as current_rule_hash
 from app.core.features import params as FP
+from app.core.rules import abstain as AB
+from app.core.rules.inputs import RuleInputs
+from app.core.rules.stops import stop_plan
 from app.core.stats.baseline import BaselineData, NaiveEvent, event_from_feature_row, run_naive_baseline
 from app.core.stats.observations import Observation
 from app.core.time import ensure_utc, utc_now
@@ -110,9 +114,38 @@ def fetch_observations(
                 fees_r=_f(l.fees_r),
                 pool_n=c.pool_n,
                 expected_r_ci_low=_f(c.expected_r_ci_low),
+                locked_book=c.locked_book,
+                abstain_cost_edge_r=abstain_cost_edge_r(session, c),
             )
         )
     return observations
+
+
+def abstain_cost_edge_r(session: Session, candidate: Candidate) -> float | None:
+    """The funding-band edge in R the abstain rule compared against, re-derived from the stored rows.
+
+    Only for an alert whose stored pool reached the abstain floor: the same pure `check_abstain` the options job ran,
+    on the candidate's feature row (carry and signal-bar reference price) and its post-options stop.
+    """
+    if candidate.status != C.ABSTAIN_APPLIES_TO_STATUS or candidate.pool_n is None:
+        return None
+    if candidate.pool_n < C.ABSTAIN_MIN_POOL_INDEPENDENT:
+        return None
+    row = session.get(FeatureRow, candidate.feature_row_id)
+    if row is None:
+        return None
+    plan = stop_plan(RuleInputs.from_feature_row(row, reference_coin=REFERENCE_COIN), candidate.direction)
+    if plan is None:
+        return None
+    check = AB.check_abstain(
+        status=candidate.status,
+        pool_n=candidate.pool_n,
+        expected_r_ci_low=_f(candidate.expected_r_ci_low),
+        funding_carry_bps=row.funding_carry_bps_horizon,
+        reference_price=plan.reference_price,
+        stop_price=Decimal(candidate.stop_price),
+    )
+    return check.cost_edge_r
 
 
 def load_observations(session: Session, *, rule_hash: str | None = None, source: str | None = None) -> LoadResult:

@@ -1064,3 +1064,54 @@ The abstain rule goes into the options job, the arithmetic behind the pooled est
   3. Expectancy with intervals against always-flat and the swing-break baseline: reported. Not beaten: the full-lookback alert interval includes 0 and the naive mean.
   4. Kill rule: not binding (0 live labels of the 300 it needs).
   So Phase 1 is not passed and not failed. It waits on live data.
+
+## P2.0 - Phase 1 loose ends and Phase 2 prep (no model)
+
+- Date: 2026-10-14
+- Model: Claude Opus 5.5 orchestrating; three subagents (walk-forward harness, promotion gate, calendar importer), reviewed by the orchestrator
+
+Clears the M7/M10 loose ends and builds the Phase 2 machinery that does not need the 300-label floor. Nothing here fits a model or changes a live decision. `RULE_VERSION` and `rule_hash` unchanged (`phase1-v7`, `443d1f49...`). One migration: `e3f9a1c47b20` (`promotion_decision`), applied to `signals`.
+
+### Work recorded from other chats (2026-10-07 .. 2026-10-14)
+- Tardis fixtures: all 12 months (2025-10 .. 2026-09) committed (`a7b6642`, `733e7d7`, `5ada374`).
+- `vision_import.py` (`c079942`): Binance Vision archive import (klines and OI), so a year replay has a full feature window. Spot kline stamps are microseconds; a bar without predicted funding reuses one feature computation across horizons.
+- 2026 replay: 2026-01-01 .. 2026-10-12 14:30 UTC, 15 coins, 27,322 bars, about 36 h. 8,720 replay candidates, 8,705 labeled (12 at the tail await bars). Report in `ytd_replay_vs_swing.txt` (workspace root). Alts alerts: thin lookback (bars before 2026-09-24) E[R] -0.006 [-0.031, +0.019], n=1220 vs naive +0.003 [-0.012, +0.019], n=3038; full lookback -0.055 [-0.142, +0.034], n=101 vs naive -0.090 [-0.142, -0.037], n=217. Both `interval_includes`: the rules did not beat the naive break, and the naive break is not clearly positive either.
+
+### Decisions (orchestrator, 2026-10-14)
+1. **Options thresholds stay.** Tardis report over 12 months: OI floors pass every month (BTC 2.7-4.4x the 100k floor, ETH 3.5-5.7x the 400k floor); the 5% large-expiry share trips only in January 2026 (BTC 7.8%, ETH 8.8%). No hash change. Owner may still overrule.
+2. **`would_abstain` uses the rule's own edge.** No new column: `stats_job.abstain_cost_edge_r` re-derives it for an alert whose stored pool reached the floor, by running the same `check_abstain` on the candidate's feature row (carry, signal-bar reference from `stop_plan`) and its post-options stop. `Observation` gains `locked_book` and `abstain_cost_edge_r` (defaults NULL). A row without the edge is tested against 0 R.
+3. **`fundingInfo` not needed.** Every watchlist symbol settled every 8 h, with no gap, over 300 days of stored prints. Mean |funding_r| is 0.0038 R on replay labels (max 0.196), 0.0011 R live, against a mean |stored R| of 0.53; no `funding_partial` label. Recheck if the watchlist changes.
+4. **Walk-forward harness** (`app/core/learning/`, pure): one cohort and one horizon per fold set; independent sample first, `no_entry` out; weekly test windows anchored to Monday 00:00 UTC; a training sample needs `decision_time + 72h <= test_start` and `resolved_at <= test_start` (embargo = longest horizon for every horizon, the slow-path rule). Locked-book and `event_flag is True` rows never train; test windows keep and mark them. `assert_fit_allowed` refuses below `LIGHTGBM_MIN_INDEPENDENT_LABELS` (300) on trainable samples, and `evaluate` calls it before every `fit` of a learning policy. Parameters in `learning/params.py` (not hashed). No model, no ML dependency.
+5. **Promotion gate** (`app/core/promotion/`, pure): per cohort and horizon, locked book only, first row per sample group, embargo per coin equal to the horizon, window >= 28 days, >= 50 pairs, mean paired difference > 0 with the 90% bootstrap lower bound > 0 (stats seed and resamples). Live binds; replay gets `preview_*` and never `promote` (also a DB CHECK). Two layers registered, the Phase 1 filters themselves: `cvd_divergence_cancel` and `vote_conflict_watch`. Pair: every alert `(R, R)`; a blocked row `(0, R)` only when the frozen functions say it would really have alerted (vote tally on the feature row, `check_options` on a pending copy with the book as of decision time, `check_abstain`); anything a second reason would also have blocked is excluded, and a recomputation that disagrees with the stored stop, cap or verdict drops the row.
+6. **`promotion_decision`** is append-only (trigger refuses UPDATE and DELETE), written only by `promotion_job --record`, with every parameter and failed criterion. It supersedes M1's `promotion_log`, which is left in place unused.
+7. **Calendar importer** writes nothing by default to a live decision: insert only, ON CONFLICT DO NOTHING, `available_at` = the import instant unless `--available-at` (warns about replay). Stand-down kinds need `--allow-stand-down-kinds`. Because the first calendar row of any kind (an unlock included) flips `event_flag` from NULL to FALSE for every coin (`feature_job.py` "loaded" test, `replay_feeds.py` likewise), a load into an empty calendar needs `--allow-event-flag-flip`. No dates were loaded or invented.
+8. **Test guard fix.** `test_every_http_call_in_the_worker_is_one_httpx_get_inside_binancehttp` failed since `bc3aa86` (`client = self._client` alias, needed by the wedged-pool swap). The guard now follows local aliases of `_client`; still exactly one GET.
+
+### Files created or modified
+- `repo/api/app/core/stats/observations.py`, `report.py`; `repo/api/app/worker/stats_job.py` - decision 2.
+- `repo/api/app/core/learning/{__init__,params,walk_forward}.py`, `repo/api/app/worker/walk_forward_job.py` (new) - decision 4.
+- `repo/api/app/core/promotion/{__init__,params,layers,gate}.py`, `repo/api/app/models/promotion.py`, `repo/api/app/worker/promotion_job.py`, `repo/api/alembic/versions/20261014_1015_e3f9a1c47b20_promotion_decision_log.py` (new); `app/models/__init__.py` - decisions 5, 6.
+- `repo/api/app/worker/calendar_import.py`, `repo/api/data/calendar/{events_template.csv,README.md}` (new) - decision 7.
+- Tests (new): `test_walk_forward.py`, `test_promotion_gate.py`, `test_promotion_job.py`, `test_calendar_import.py`. Updated: `test_stats_job.py`, `test_stats_report.py`, `test_ingest_config.py`, `test_models_schema.py`, `test_migration_matches_models.py` (14 tables; skips while `public` is behind the script head).
+
+### Contracts frozen
+- `python -m app.worker.walk_forward_job [--source] [--horizon] [--json]` - read-only; prints fold sets and `fit allowed: yes/no (n=X/300)`. Fits nothing.
+- `python -m app.worker.promotion_job [--layer NAME|--all] [--source] [--as-of] [--json] [--record]` - read-only unless `--record`.
+- `python -m app.worker.calendar_import --file PATH.csv [--dry-run] [--allow-stand-down-kinds] [--allow-event-flag-flip] [--available-at ISO]`; `--coverage [--days N]` (read-only).
+- CSV columns: `kind,coin,event_time,is_large,notional_usd,title,feed_source` (`feed_source` required).
+
+### Deferred / owner decisions
+- **Thin-lookback cutoff.** `ESTIMATE_THIN_LOOKBACK_CUTOFF_UTC` (hashed) still puts every bar before 2026-09-24 in `thin`, though the Vision import gave the 2026 replay a full feature window. So 1,220 independent alts alerts never feed pools, the kill-rule preview or a fold set marked full. Moving it changes `rule_hash` and needs the 36 h replay again.
+- **What "calendar loaded" means** (any row vs only stand-down kinds): changing it changes feature values (not `rule_hash`).
+- **Unlock dates** for the 13 alts, and CPI/FOMC dates: owner fills `data/calendar/events_template.csv` from a trusted source.
+- `NTFY_URL` still empty.
+- M3.1 ambiguity 1 still open.
+
+### Verification
+- `cd repo/api; & '.\.venv\Scripts\python.exe' -m pytest -q` -> **`1670 passed, 1 warning in 277s`** (1572 at M10), after `alembic upgrade head` to `e3f9a1c47b20`.
+- `rule_hash()` = `443d1f49564fb16fe3cfbf7e52d638d1c1c746faab2aaf3d00a8613f2389680d` (unchanged).
+- `stats_job --source live` and `--source replay`: `would_abstain` 0 in every cohort with the new edge (no alert carries a pool >= 30 yet, so the path is covered by tests, not by real rows). Live: 59 independent alts alerts and 15 options-layer alerts of 300.
+- `walk_forward_job`: live has no fold set near the floor (best 30 trainable of 300). Replay thin alts already clear it for scalp (761 trainable, 36 folds) and swing (374, 34 folds).
+- `promotion_job --all` (read-only): live, all 12 cells `insufficient` (at most 12 pairs, 8.8 days). Replay preview: `vote_conflict_watch` `preview_promote` on thin alts scalp (+0.054 R [+0.024, +0.084], 242 pairs) and swing (+0.094 [+0.027, +0.163], 124); `cvd_divergence_cancel` `preview_reject` (scalp -0.002 [-0.016, +0.010], 171; swing +0.011 [-0.027, +0.048], 93): no effect either way.
+- `calendar_import --coverage`: 0 calendar rows; all 13 alts missing unlocks.
+- Live worker: `signal_pipeline` ok on every bar, 0 errors over 9 days.

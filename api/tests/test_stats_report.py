@@ -394,6 +394,16 @@ def test_would_abstain_counts_alerts_the_abstain_rule_should_have_stopped():
     assert 'funding' in w.cost_basis and '0 R' in w.cost_basis
 
 
+def test_would_abstain_tests_against_the_rederived_funding_edge():
+    rows = [
+        abstain_row(30, 0.05, abstain_cost_edge_r=0.08),  # low above 0 but below the edge -> should have abstained
+        abstain_row(30, 0.08, abstain_cost_edge_r=0.08),  # equal to the edge: the rule is strict, not below
+        abstain_row(30, 0.05, abstain_cost_edge_r=None),  # edge not re-derivable: tested against 0 R
+    ]
+    w = R.build_report(rows).cohorts[0].would_abstain
+    assert (w.alerts_with_estimate, w.would_abstain) == (3, 1)
+
+
 def test_would_abstain_counts_a_pool_at_the_floor_without_an_interval():
     w = R.build_report([abstain_row(30, None)]).cohorts[0].would_abstain
     assert w.would_abstain == 1

@@ -35,6 +35,7 @@ EXPECTED_TABLES = {
     'label',
     'job_run',
     'promotion_log',
+    'promotion_decision',  # Phase 2 prep: the append-only promotion-gate log
 }
 
 

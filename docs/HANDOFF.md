@@ -1,6 +1,6 @@
 # Handoff — Phase 1 signals loop
 
-Written 2026-10-03, updated 2026-10-05 after M10. Spec: [`self-learning-crypto-signals.md`](../../self-learning-crypto-signals.md). Plan: `C:\Users\User\.cursor\plans\phase_1_signals_loop_cdbc8e73.plan.md`. Detailed contracts: [`BUILD-LOG.md`](BUILD-LOG.md).
+Written 2026-10-03, updated 2026-10-14 after P2.0 (Phase 1 loose ends, Phase 2 prep). Spec: [`self-learning-crypto-signals.md`](../../self-learning-crypto-signals.md). Plan: `C:\Users\User\.cursor\plans\phase_1_signals_loop_cdbc8e73.plan.md`. Detailed contracts: [`BUILD-LOG.md`](BUILD-LOG.md).
 
 ## Goal
 
@@ -23,8 +23,10 @@ Private paper-only crypto signals loop on the Win10 laptop: ingest → features 
 | M8.1 Stats follow-ups | done | see `git log` (commit after `840e8eb`) |
 | M9 API/UI | done | see `git log` (commit after `9a8cd14`) |
 | M10 Gate | code done; Phase 1 exit waits on live labels | `f124e80` + docs |
+| Tardis 12 months, Vision import, 2026 replay | done | `a7b6642` .. `c079942` |
+| P2.0 Loose ends + Phase 2 prep (no model) | done | see `git log` (commit after `c079942`) |
 
-**1572 tests pass** (plus 9 Angular tests). DB `signals` at Alembic head `d8b2f6a31e05`: replay 2026-09-04 .. 2026-10-05 07:45 UTC, 15 coins, 862 candidates, 843 labels (19 awaiting bars); live candidates since bar 2026-10-05 07:45 UTC. `RULE_VERSION = 'phase1-v7'`, `rule_hash = 443d1f49564fb16fe3cfbf7e52d638d1c1c746faab2aaf3d00a8613f2389680d`. Live worker restarted 2026-10-05 07:53 UTC on `f124e80` (runs ingest, notify and `signal_pipeline`). Old v6 replay rows backed up in `backups/m10-v6-replay/`.
+**1670 tests pass** (plus 9 Angular tests). DB `signals` at Alembic head `e3f9a1c47b20`: replay 2026-01-01 .. 2026-10-12 14:30 UTC, 15 coins, 8,720 candidates, 8,705 labels (12 at the tail await bars); live candidates since bar 2026-10-05 07:45 UTC (156 on 2026-10-14; 59 independent alts alerts and 15 options-layer alerts of the 300 the kill rule needs). `RULE_VERSION = 'phase1-v7'`, `rule_hash = 443d1f49564fb16fe3cfbf7e52d638d1c1c746faab2aaf3d00a8613f2389680d`. Live worker runs ingest, notify and `signal_pipeline` (0 errors over 9 days). Old v6 replay rows backed up in `backups/m10-v6-replay/`.
 
 ## Decisions locked
 
@@ -52,9 +54,14 @@ Private paper-only crypto signals loop on the Win10 laptop: ingest → features 
 - **M9 (orchestrator-decided at the owner's request).** API is GET-only plus `WS /ws`, guarded by `route_policy.audit_app_routes` (no order-like path, no request body, hidden routes included). Routers use sync READ ONLY sessions and reuse the M8 loaders. Stats cached per source until the label/estimate fingerprint changes (cold build about 20 s). Card hides every estimate below a 30-outcome pool (`edge_hidden`); the options line has no probability. Notification = ntfy from the worker on stand-down start/change/end and new live alerts; empty `NTFY_URL` logs only. Full list in the M9 entry of `BUILD-LOG.md`.
 - **M10 (orchestrator).** Abstain: an `alert` with a pool of at least 30 abstains when the interval's lower bound of net expected R is below the funding-band adverse edge in R (0 when unknown; fees not charged again). Status `abstained`, reason `abstain:edge_below_cost`. The options job is the single live estimate path: estimate, abstain and verdict are written together, and an estimator failure defers the check. One scheduled job `signal_pipeline` (60 s) runs labels, features, rules and options for the latest closed bar; missed bars are not back-filled. Replay labels each bar before deciding it and refuses stale-hash replay rows unless run with `--purge-stale`. Full list in the M10 entry of `BUILD-LOG.md`.
 
+- **P2.0 (orchestrator).** Options thresholds stay (12 Tardis months: floors pass 2.7-5.7x, large expiry trips only in Jan 2026). `would_abstain` re-derives the rule's funding edge from the stored feature row. `fundingInfo` is not needed (every watchlist symbol settled every 8 h all year; funding is about 0.004 R per trade). Phase 2 prep without a model: walk-forward harness (`app/core/learning`), shadow promotion gate (`app/core/promotion`) with the append-only `promotion_decision` log, and the calendar importer with unlock coverage. Full list in the P2.0 entry of `BUILD-LOG.md`.
+
 ## Open
 
-M3.1 Ambiguity 1: the state is measured against the last confirmed swing, so a new swing that forms after the break can end it early. Revisit if replay shows it matters. M6: a symbol Binance has moved to 1h or 4h funding is held to the 8h hole tolerance, so a single missed print there goes undetected; if M8 shows funding matters, read `GET /fapi/v1/fundingInfo` for per-symbol intervals. M10: the report's `would_abstain` check uses 0 R because the funding-band edge is not stored on the candidate.
+- M3.1 Ambiguity 1: the state is measured against the last confirmed swing, so a new swing that forms after the break can end it early. Revisit if replay shows it matters.
+- **Thin-lookback cutoff (owner).** `ESTIMATE_THIN_LOOKBACK_CUTOFF_UTC = 2026-09-24` (hashed) still marks every 2026 replay bar before it as `thin`, though the Vision import gave those bars a full feature window. 1,220 independent replay alts alerts therefore never feed pools, the kill-rule preview or a `full` fold set. Moving it changes `rule_hash` and needs the 36 h replay again (`--purge-stale` after a backup).
+- **"Calendar loaded" (owner).** Any `event_calendar` row, an unlock included, flips `event_flag` from NULL to FALSE for every coin. Decide whether only stand-down kinds should count before loading unlocks; the importer refuses the first load without `--allow-event-flag-flip`.
+- M1's `promotion_log` is superseded by `promotion_decision` and unused.
 
 ## Key files
 
@@ -66,7 +73,10 @@ M3.1 Ambiguity 1: the state is measured against the last confirmed swing, so a n
 | `api/app/models/as_of.py` | Available-at read gate |
 | `api/app/models/*.py` | 13 tables; no order/position tables |
 | `api/app/core/rules/abstain.py` | Pure abstain rule (M10) |
-| `api/app/worker/` | Ingest, backfill, `feature_job`, `rules_job`, `options_job`, `label_job`, `pipeline` (live signal job), `replay`, `stats_job`, `notify`, `stand_down` |
+| `api/app/worker/` | Ingest, backfill, `vision_import`, `feature_job`, `rules_job`, `options_job`, `label_job`, `pipeline` (live signal job), `replay`, `stats_job`, `notify`, `stand_down`, `walk_forward_job`, `promotion_job`, `calendar_import` |
+| `api/app/core/learning/` | Purged walk-forward harness and the 300-label fit guard (no model) |
+| `api/app/core/promotion/` | Shadow promotion gate and its layers; log table `promotion_decision` |
+| `api/data/calendar/` | Calendar CSV template and README (owner fills unlock, CPI, FOMC dates) |
 | `signals-panel.ps1` (workspace root, not in the repo) | Start, stop and reload the API, web and worker |
 | `api/app/routers/` | Read-only API (cards, tracker, stats, feed health, stand-down, `/ws`) + `route_policy` |
 | `web/src/app/` | Angular dashboard |
@@ -94,15 +104,13 @@ Subagents don't see the chat. Each brief must name the milestone, point to this 
 
 ## Next step
 
-1. **M7 loose ends** (see the M7 entry in `BUILD-LOG.md`; harness, marker and the real replay run are done):
-   - **Tardis fixtures.** Tardis hit its free data-transfer cap on 2026-10-04 at about 16:00 UTC (HTTP 429, code 277, retry after about 24h), so the next run is due after about 16:00 UTC on 2026-10-05 (not run during M9 or M10). After it resets, from `repo/api`: `& '.\.venv\Scripts\python.exe' scripts\tardis_options_fixtures.py --timeout 1200`, then `... --report`. Months already built are skipped, so rerun daily until all 12 exist (2025-10 and 2025-11 done, `652d711`; the cap allows about two months per day per IP). Do not probe the endpoint by hand: every probe counts against the cap.
-   - **Threshold decision (owner).** From the report: do the OI floors (BTC 100k / ETH 400k) and the 5% large-expiry share behave sensibly on real books? 2 of 12 months so far show no reason to change (floors pass 3-5.6x; large expiry never trips because the expiry nearest the hold end is usually a daily, and first-of-month books rarely sit near a monthly expiry). Any change moves `rule_hash`, and the replay then has to be rerun (about 2 h): the labeler skips rows on an old hash.
-   - **Replay rerun done 2026-10-05 on `phase1-v7`** (counts in the M10 entry). To label the 19 rows still awaiting bars, rerun the same range with a later `--label-at` (existing rows are skipped, about 2 h because every feature row is rechecked). After any hash change, back up and add `--purge-stale`, then run `stats_job --enrich-estimates`.
-   - Options history policy stays as decided: no paid Tardis history; BTC/ETH replay rows without a book carry `options_ignored:no_options_history`, and M8 must never pool them with live rows that went through the options layer.
-   - **Keep the live worker running** (`python -m app.worker`, or the Worker row in `signals-panel.ps1`). It now also decides every live bar; a bar missed while it is down is never decided, and every day down loses Deribit OI for good.
-2. **Phase 1 exit (M10 verdict): not passed, not failed; waiting on live labels.** Labels and hashes: met. Reliability diagram: built, but empty until a pool reaches 30 (best 18). Expectancy: replay full-lookback alts alerts -0.052 R [-0.151, +0.045], n=54, interval includes flat and the naive baseline (-0.125 [-0.177, -0.073], n=134), so not beaten; thin-lookback +0.141 [+0.032, +0.247], n=70, not conclusive. Kill rule: 0 live labels of 300. Recheck with `python -m app.worker.stats_job --source live` (and `--source replay`) as live labels accumulate; the first live pools reach 30 after 30 independent live outcomes per edge-line cell, and the kill rule binds at 300.
-3. **Owner:** set `NTFY_URL=https://ntfy.sh/<long random topic>` in `repo/api/.env` and subscribe in the ntfy app, then reload the worker (panel). Until then live alerts only log.
-4. **Watch the live pipeline** for a day: `job_run` rows with `job_name='signal_pipeline'` should show one `ok` per 15-minute bar (hourly bars may take two ticks), `errors` empty, and live labels appearing once horizons resolve.
+1. **Keep the live worker running** (`python -m app.worker`, or the Worker row in `signals-panel.ps1`). It decides every live bar; a bar missed while it is down is never decided, and every day down loses Deribit OI for good. Phase 2 cannot start before the live cohorts reach 300 independent labels (about 6 weeks for alts at the current rate, months for BTC/ETH).
+2. **Phase 1 exit: not passed, not failed; waiting on live labels.** Labels and hashes: met. Reliability diagram: built, empty until a pool reaches 30. Expectancy: the 2026 replay did not beat the naive break (numbers in the P2.0 entry). Kill rule: live 59 of 300 (alts), 15 of 300 (options layer). Recheck with `python -m app.worker.stats_job --source live`.
+3. **Owner decisions** (see Open): the thin-lookback cutoff, what "calendar loaded" means, and confirm the options thresholds stay (12-month Tardis check found no reason to move them).
+4. **Owner data:** fill `repo/api/data/calendar/events_template.csv` with unlock dates for the 13 alts (and CPI/FOMC when ready) from a trusted source, then `python -m app.worker.calendar_import --file ... --dry-run`, then the real run with the flags it asks for. Check with `--coverage`. Unlocks are required before alts leave the book in Phase 2.
+5. **Owner:** set `NTFY_URL=https://ntfy.sh/<long random topic>` in `repo/api/.env` and subscribe in the ntfy app, then reload the worker (panel). Until then live alerts only log.
+6. **Phase 2 tooling, read-only until the floor:** `python -m app.worker.walk_forward_job --source live` (fold sets and `fit allowed`), `python -m app.worker.promotion_job --all --source live` (shadow gate; add `--record` to log verdicts to `promotion_decision`). No model is fitted anywhere; LightGBM is not installed.
+7. Replay tail: 12 replay candidates at 2026-10-12 await bars; a rerun with a later `--label-at` labels them (not worth the hours on its own). After any hash change, back up, rerun with `--purge-stale`, then `stats_job --enrich-estimates`.
 
 Local run (from `repo/api`):
 

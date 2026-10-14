@@ -87,6 +87,25 @@ def test_observations_carry_the_label_regime_the_funding_flags_and_unmodified_ba
     assert not by_id[moved.id].barriers_unmodified  # stop widened by amplify
 
 
+def test_alerts_at_the_abstain_floor_carry_the_rules_funding_edge_and_the_locked_book(session):
+    price_layer = dict(
+        chandelier_stop_price=Decimal('99'),
+        chandelier_stop_distance_atr=Decimal('2'),
+        atr_price=Decimal('0.5'),
+        funding_carry_bps_horizon=Decimal('-50'),
+    )
+    at_floor = cand(session, 0, pool_n=30, expected_r_ci_low=Decimal('0.1'), locked_book=True, feature_overrides=price_layer)
+    add_label(session, at_floor)
+    below = cand(session, 15, pool_n=29, expected_r_ci_low=Decimal('0.1'), feature_overrides=price_layer)
+    add_label(session, below)
+    by_id = {o.candidate_id: o for o in stats_job.load_observations(session).observations}
+    # reference 99 + 2 * 0.5 = 100, 1R = 1; |-50| bps of 100 = 0.5 R
+    assert by_id[at_floor.id].abstain_cost_edge_r == pytest.approx(0.5)
+    assert by_id[at_floor.id].locked_book is True
+    assert by_id[below.id].abstain_cost_edge_r is None
+    assert by_id[below.id].locked_book is False
+
+
 def test_no_entry_labels_load_with_no_r(session):
     c = cand(session, 0)
     add_label(session, c, first_barrier='no_entry')
