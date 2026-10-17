@@ -170,3 +170,35 @@ None.
 - The weekly Impulse veto can never fire once the tide is set. In any `tide_mode`, a tide of `+1` means a rising EMA or histogram, and an Impulse of `-1` needs both falling. It only blocks through a cold (`None`) Impulse. It is kept as Elder wrote it.
 - A 6H close that arrives while an order is pending is spent; it does not re-arm after a later fill or expiry.
 - `force2` uses a volume SMA that includes the current 6H bar.
+
+## E4 - Simulator
+
+- Date: 2026-10-17
+- Model: Claude Sonnet 5.5 high (implementer), Bugbot (review: no bugs), Claude Opus 5.5 (diff review)
+
+### Files created or modified
+- `repo/api/app/research/elder/simulate.py` - one trade on 15m bars: parts, breakeven, trailing, 10R cap, tide exit, costs, funding, censoring.
+- `repo/api/tests/test_elder_simulate.py` - 98 tests, including a 1,500-trade randomized property test and a long/short mirror test.
+
+### Contracts frozen
+- `app.research.elder.simulate`: `FundingPrint(funding_time, rate, mark_price=None)`; `PartExit(share, price, time, reason, stop_kind, gapped, ambiguous)` with `reason` in `REASONS` = `stop`, `t1`, `t2`, `tide_exit` and `stop_kind` in `STOP_KINDS` = `initial`, `breakeven`, `trail` (stops only); `Trade(coin, direction, fill_time, fill_index, entry_price, initial_stop, r, exits, hit_t1, hit_t2, stopped_before_t1, censored, censor_reason, last_index, closed_time, price_r, cost_r, funding_r, total_r, open_share, mark_r, mae_r, mfe_r, bars_held)`; `CENSOR_REASONS` = `end_of_period`, `hole`.
+- `simulate_trade(entry, ctx, params, funding, end_time) -> Trade`. Uses only 15m bars with `close_time <= end_time`. The runner frees the coin for fills with `fill_index > trade.last_index`.
+- Fill bar: only the stop can trigger (ambiguous); no target credit. Later bars, at the open: breakeven and trailing updates, then tide exit (weekly direction `-d` or weekly Impulse `-d`; 0 or `None` does not exit), then a gap through the stop at the open. Intrabar: stop first (same bar as a target -> stop), else T1 at the T1 price, then T2 at the T2 price on the same bar. A gap past a target books at the target, never better.
+- After T1, breakeven (if `be_after_t1`) and trailing start from the next bar. The first trailing update is at the next 6H close after that: highest high (lowest low) of bars before the current one minus `trail_atr` x 6H ATR at that close; never loosens.
+- `cost_r` = share x `COST_ROUND_TRIP` x entry / R per closed part. `funding_r` counts prints with `fill_time < funding_time < part exit time`, signed, notional = mark price else entry. `total_r = price_r - cost_r + funding_r` over closed shares only; a censored trade's open share is reported as `open_share` and `mark_r` and gets no funding.
+
+### Results
+- Full suite: 1937 passed, 1 failed (the owner's calendar CSV, as in E2 and E3). Including the current bar's high in the trailing max (a deliberate lookahead) failed six tests.
+
+### Deferred to a later milestone
+- Censored trades must stay out of E[R] even though `total_r` holds their closed T1 part -> E5.
+- Runner position rule (`fill_index > last_index`) -> E5.
+
+### Deviations from the plan
+None.
+
+**Ambiguities**
+- A tide-exit bar that opens past T1 or T2 books that part at the target price (`t1` / `t2`) and only the rest as `tide_exit`, so no part can exceed 10R.
+- With `t1_share = 0` the T1 event still starts breakeven and trailing; with `t1_share = 1` there is no runner.
+- The 6H close that is already visible on the bar where T1 fills does not count as a trailing update; the first update is the following 6H close.
+- `mae_r` and `mfe_r` are non-negative magnitudes; a stop-out bar counts at the exit price.
