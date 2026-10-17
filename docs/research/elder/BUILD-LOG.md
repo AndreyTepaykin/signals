@@ -202,3 +202,47 @@ None.
 - With `t1_share = 0` the T1 event still starts breakeven and trailing; with `t1_share = 1` there is no runner.
 - The 6H close that is already visible on the bar where T1 fills does not count as a trailing update; the first update is the following 6H close.
 - `mae_r` and `mfe_r` are non-negative magnitudes; a stop-out bar counts at the exit price.
+
+## E5 - Runner
+
+- Date: 2026-10-17
+- Model: Grok 4.7 High Fast (implementer), Claude Opus 5.5 (diff review)
+
+### Files created or modified
+- `repo/api/app/research/elder/load.py` - read-only load of `candle` (perp 15m, 1h, 4h) and settled `funding`.
+- `repo/api/app/research/elder/report.py` - period run, one position per coin, summaries, baselines, markdown.
+- `repo/api/app/research/elder/run.py` - CLI: train, freeze, holdout.
+- `repo/api/app/research/elder/params_space.json` - tuning bounds with unit notes; `params_default.json` - starting params.
+- `repo/api/tests/test_elder_load.py`, `test_elder_report.py`, `test_elder_run.py`.
+
+### Contracts frozen
+- CLI (from `repo/api`): `python -m app.research.elder.run --period train --params <file> [--out-dir DIR] [--end ISO]`; `--freeze --trial N [--out-dir DIR]`; `--period holdout --params <out-dir>/frozen.json [--force --reason TEXT] [--out-dir DIR] [--end ISO]`. Exit codes: 0 ok, 2 bad usage or params outside `params_space.json`, 3 refusal (broken trial chain, existing `frozen.json`, holdout lock).
+- Train is `[2026-01-01, 2026-07-01)` with sub-windows `jan_apr` `[01-01, 05-01)` and `may_jun` `[05-01, 07-01)`; a train `--end` past 2026-07-01 is refused, and train loads no bar closing after its end. Holdout is `[2026-07-01, end)`, end defaulting to the smallest latest perp 15m close across the 10 coins.
+- Files in `research_out/elder/`: `trials.jsonl` (append-only; each line carries `trial_id` and `prev_sha256` of the previous line; the chain is verified before every append and freeze), `train_<NNN>_<hash8>.json/.md`, `frozen.json`, `holdout.lock`, `holdout_log.jsonl`, `holdout_<hash8>.json/.md`. Holdout never writes `trials.jsonl` (checked byte for byte after the run).
+- Report fields per window, overall and per coin: `n_closed`, `n_censored`, `trades_per_week`, `p_t1`, `p_t2`, `p_stop_before_t1` (Wilson 90%), `e_r` with `e_r_interval` (bootstrap 90%, closed trades only), profit factor, max drawdown, R quantiles and histogram, hold hours, the signal funnel and the min-distance drop rate. `objective` = lower bound of the E[R] interval when 1 <= trades/week <= 3 on the whole train, else `None` (`objective_feasible`).
+- Baselines: `no_trade`; `random_tide` = entries at the open of random 15m bars where the weekly tide permits, same stop and exits, one position per coin, matched to the strategy's trade count per coin, 20 seeds.
+
+### Results
+- Smoke train run on real data with `params_default.json` (45 s; output deleted, so `trials.jsonl` starts empty for E6):
+
+| Window | Closed | Censored | Trades/week | P(T1) | P(10R) | E[R] (90%) |
+|---|---:|---:|---:|---:|---:|---|
+| Train | 155 | 7 | 6.27 | 0.503 | 0.071 | +0.329 [+0.089, +0.576] |
+| Jan-Apr | 58 | 0 | 3.38 | 0.621 | 0.086 | +0.693 [+0.291, +1.102] |
+| May-Jun | 97 | 7 | 11.93 | 0.433 | 0.062 | +0.111 [-0.162, +0.417] |
+
+- Funnel (train): 757 arms, 749 fills, 8 expired, 0 cancelled; drops 9 wrong side, 214 too close, 130 costs over cap (min-distance drop rate 0.459); 396 entries, 234 skipped while a position was open, 162 trades. Objective not feasible (6.27 trades/week); its lower bound would be +0.089.
+- `random_tide` mean E[R] +0.277; 25% of seeds reach the strategy's E[R].
+- Full suite: 1961 passed, 1 failed (the owner's calendar CSV).
+
+### Deferred to a later milestone
+- Tuning to 1-3 trades/week and judging whether the wave and ripple beat `random_tide` -> E6.
+- `holdout.lock` is written after the holdout report, not before; a crash between the two would leave no lock. Acceptable for a one-person run; E7 checks the lock exists right after the run -> E7.
+
+### Deviations from the plan
+- Added `load.py` and `params_default.json` (not in the E0 file list).
+
+**Ambiguities**
+- No cancels on real data: with `ripple_expiry_bars` 8 (2 hours), the order expires before the next 6H close can switch the wave off; only a weekly flip could cancel it. Cancels become possible once expiry exceeds 24 bars.
+- The ripple filters almost nothing (749 of 757 armed orders fill). Selection falls on the wave threshold and the stop-distance floor, as the E0 open items predicted.
+- The May-June rate (11.9 a week) is 3.5 times Jan-Apr's, so the trade count depends heavily on the regime.

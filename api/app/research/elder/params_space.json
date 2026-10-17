@@ -1,0 +1,54 @@
+{
+  "tide_mode": {
+    "choices": ["ema", "macd", "both"],
+    "notes": "Weekly tide. ema: sign of the EMA(13) slope. macd: sign of the MACD histogram (12/26/9) slope. both: the two must agree, otherwise the tide is flat."
+  },
+  "wave_osc": {
+    "choices": ["force2", "stoch", "elder_ray"],
+    "notes": "6H oscillator. force2 is Force Index(2) divided by (6H ATR x SMA20 of 6H volume). stoch is slow %K(5,3) in points. elder_ray is Elder-ray power measured in 6H ATR."
+  },
+  "wave_threshold": {
+    "by_wave_osc": {
+      "force2": [0.0, 2.0],
+      "stoch": [5.0, 50.0],
+      "elder_ray": [0.0, 2.0]
+    },
+    "notes": "Units depend on wave_osc. force2: a pure number; long when normalized Force Index < -threshold (0 leaves only the sign). stoch: slow %K points; long when %K < threshold, short when %K > 100 - threshold. elder_ray: multiples of 6H ATR; long when bear power < -threshold x ATR and is rising."
+  },
+  "wave_block_impulse": {
+    "choices": [true, false],
+    "notes": "When true, a 6H Impulse against the trade blocks the wave. A cold Impulse also blocks."
+  },
+  "ripple_expiry_bars": {
+    "int": [1, 96],
+    "notes": "15m bars a stop order stays working, counted from the arm bar. 96 bars is 24 hours."
+  },
+  "stop_lookback_bars": {
+    "int": [1, 10],
+    "notes": "How many closed 6H bars the stop looks back over. The stop sits beyond that window's extreme."
+  },
+  "stop_atr_buffer": {
+    "range": [0.0, 1.5],
+    "notes": "Extra distance beyond the 6H extreme, in 6H ATR(14) units."
+  },
+  "min_stop_atr": {
+    "range": [0.0, 2.0],
+    "notes": "Minimum 1R, in 6H ATR(14) units. A closer stop is dropped (stop_too_close_atr)."
+  },
+  "t1_r": {
+    "range": [1.0, 2.0],
+    "notes": "First target, in R. t1_share of the position closes here."
+  },
+  "t1_share": {
+    "range": [0.2, 0.8],
+    "notes": "Fraction of the position closed at T1. The remainder trails until the 10R cap or a tide exit."
+  },
+  "be_after_t1": {
+    "choices": [true, false],
+    "notes": "After T1 fills, move the stop to the entry from the next 15m bar."
+  },
+  "trail_atr": {
+    "range": [1.0, 6.0],
+    "notes": "Chandelier distance for the runner, in 6H ATR(14), updated when a new 6H bar closes."
+  }
+}
