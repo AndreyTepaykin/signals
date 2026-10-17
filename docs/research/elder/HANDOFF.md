@@ -12,7 +12,7 @@ Test one new hypothesis offline: Elder's Triple Screen as a single **position** 
 |-----------|-------|--------|
 | E0 Plan and owner decisions | done (docs only) | - |
 | E1 History backfill (perp 4h, 2024-10-01 .. 2025-10-01) | done (21,900 rows, no gaps, 64 full weeks before train) | see git log |
-| E2 Indicators and resampling (1h -> 6H, 4h -> 1W) | pending | - |
+| E2 Indicators and resampling (1h -> 6H, 4h -> 1W) | done (60 tests) | see git log |
 | E3 Signals (tide 1W, wave 6H, ripple 15m, stop, min-distance filter) | pending | - |
 | E4 Simulator (T1 partial, breakeven, trailing, 10R cap, tide exit, costs, funding, censoring) | pending | - |
 | E5 Runner (read-only load, report, baselines, `trials.jsonl`, holdout lock) | pending | - |
@@ -76,5 +76,5 @@ Subagents do not see the chat. Each brief names the milestone, points to this fi
 
 ## Next step
 
-1. E2: indicators and resampling, in a subagent on Grok 4.7 High Fast, scoped to `indicators.py`, `resample.py` and their tests. The tests must pin the 6H boundaries (00/06/12/18 UTC), the Monday 00:00 UTC weekly boundary, skipped incomplete bars, and NULL for cold indicators.
-2. E3 onward per the plan. Keep the live worker running meanwhile; this research does not need it stopped.
+1. E3: signals, in a subagent on Sonnet 5.5 high, then Bugbot. Scope `signals.py` and `tests/test_elder_signals.py`, built on the E2 contracts in `BUILD-LOG.md`. Key risk is lookahead: a decision on a 15m bar sees only the last 6H and 1W bars closed by that bar's open. Precompute close times rather than calling `last_closed_index` per bar on raw lists.
+2. E4 onward per the plan. Keep the live worker running meanwhile; this research does not need it stopped.

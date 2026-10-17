@@ -102,3 +102,34 @@ None.
 
 ### Deviations from the plan
 None.
+
+## E2 - Indicators and resampling
+
+- Date: 2026-10-17
+- Model: Grok 4.7 High Fast (implementer; the first run was cut off after writing the modules, a second run reviewed them and wrote the tests), Claude Opus 5.5 (diff review)
+
+### Files created or modified
+- `repo/api/app/research/__init__.py`, `repo/api/app/research/elder/__init__.py` - package markers.
+- `repo/api/app/research/elder/resample.py` - `OHLCV`, 1h -> 6H and 4h -> 1W, `align`, `last_closed_index`.
+- `repo/api/app/research/elder/indicators.py` - EMA, slope, MACD histogram, Force Index, Stochastic, Elder-ray, Impulse, Wilder ATR, `ohlcv_fields`.
+- `repo/api/tests/test_elder_resample.py`, `repo/api/tests/test_elder_indicators.py` - 60 tests.
+
+### Contracts frozen
+- `app.research.elder.resample`: `OHLCV(open_time, close_time, open, high, low, close, volume)` (frozen dataclass, tz-aware UTC, `close_time` = exclusive end = `open_time + length`; the E5 loader converts Binance's close, which is 1 ms earlier). `STEP_15M`, `STEP_1H`, `STEP_4H`, `STEP_6H`, `STEP_1W`. `bucket_start_6h(t)`, `bucket_start_1w(t)`. `to_6h(bars_1h) -> list[OHLCV]`, `to_1w(bars_4h) -> list[OHLCV]`: a bucket is emitted only with all 6 (or 42) source bars on the grid, else skipped. `align(bars, step) -> list[OHLCV | None]`. `last_closed_index(bars, as_of) -> int | None` (`close_time <= as_of`).
+- `app.research.elder.indicators`, every function returns a list as long as its input; `None` in -> `None` out and the indicator restarts; cold is `None`, a computed zero is `0.0`: `ema(values, period)` (SMA seed at run index `period - 1`), `slope(values)`, `macd_hist(closes, fast=12, slow=26, signal=9)` (first value at index 33), `force_index(closes, volumes, period=2)`, `stochastic(highs, lows, closes, period=5, smooth=3)` (slow %K; a flat window is `None` while inside the smoothing window, no reset), `elder_ray(highs, lows, closes, period=13) -> (bull, bear)`, `impulse(closes, ema_period=13, fast=12, slow=26, signal=9) -> list[int | None]` (+1 / -1 only when both slopes strictly agree, else 0), `wilder_atr(highs, lows, closes, period=14)` (first value at run index 14), `ohlcv_fields(bars) -> (opens, highs, lows, closes, volumes)`.
+- No-lookahead primitive for E3: a decision on 15m bar t calls `last_closed_index(bars_6h_or_1w, t.open_time)`.
+
+### Results
+- Tests: 60 Elder tests pass. Full suite: 1730 passed, 1 failed. The failure is `tests/test_calendar_import.py::test_the_shipped_template_is_header_only`, caused by 52 uncommitted rows the owner added to `data/calendar/events_template.csv`; not E2 code.
+- Data check in SQL, perp, 10 coins: 105 complete weeks per coin from 2024-10-07 to the last closed week, none partial; 1,518 complete 6H buckets per coin from 2025-10-01 06:00 UTC (the one partial bucket per coin was the query's own cut at 21:00 UTC); 15m from 2025-10-01 00:00 to 2026-10-17 14:15 UTC with no gaps.
+- `wilder_atr` matches `app.core.features.volatility.wilder_atr_from_ranges` (same seed and recursion; cross-check test). Core's public `wilder_atr` returns one reading and treats a non-positive ATR as missing; this one returns the series and keeps 0.0.
+
+### Deferred to a later milestone
+- `last_closed_index` validates and rebuilds the close-time list on every call (O(n)). Calling it for every 15m bar is roughly 25k calls per coin; E3 should precompute the close times once or walk a pointer -> E3.
+
+### Deviations from the plan
+None.
+
+**Ambiguities**
+- Force Index: a hole in volume also leaves the next bar's raw value undefined (the previous bar is needed). Chosen: yes, it restarts.
+- Elder-ray: a missing high or low, not only a missing close, restarts the EMA.
