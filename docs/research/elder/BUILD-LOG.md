@@ -133,3 +133,40 @@ None.
 **Ambiguities**
 - Force Index: a hole in volume also leaves the next bar's raw value undefined (the previous bar is needed). Chosen: yes, it restarts.
 - Elder-ray: a missing high or low, not only a missing close, restarts the EMA.
+
+## E3 - Signals
+
+- Date: 2026-10-17
+- Model: Claude Sonnet 5.5 high (implementer), Bugbot (review: no bugs), Claude Opus 5.5 (diff review)
+
+### Files created or modified
+- `repo/api/app/research/elder/params.py` - fixed constants and `ElderParams`.
+- `repo/api/app/research/elder/signals.py` - context, tide, wave, ripple order, stop and filters.
+- `repo/api/tests/test_elder_params.py` (44 tests), `repo/api/tests/test_elder_signals.py` (65 tests).
+
+### Contracts frozen
+- `app.research.elder.params`: `T2_R = 10.0`, `EMA_PERIOD = 13`, `MACD_FAST, MACD_SLOW, MACD_SIGNAL = 12, 26, 9`, `ATR_PERIOD = 14`, `STOCH_PERIOD = 5`, `STOCH_SMOOTH = 3`, `FORCE_PERIOD = 2`, `VOLUME_SMA = 20`, `COST_ROUND_TRIP = 0.0012`, `MAX_COST_R = 0.1`, `TIDE_MODES`, `WAVE_OSCS`. `ElderParams(tide_mode, wave_osc, wave_threshold, wave_block_impulse, ripple_expiry_bars, stop_lookback_bars, stop_atr_buffer, min_stop_atr, t1_r, t1_share, be_after_t1, trail_atr)`, frozen; `from_dict` (rejects unknown and missing keys), `to_dict`, `params_hash()` (sha256 of sorted, compact JSON; ints in float fields become floats, so `1` and `1.0` hash alike).
+- `wave_threshold` units depend on `wave_osc`: `force2` - Force Index(2) / (6H ATR x SMA20 of 6H volume), long below `-threshold`; `stoch` - slow %K(5,3), long below `threshold`, short above `100 - threshold`; `elder_ray` - long when bear power < `-threshold` x ATR and rising, short mirrored on bull power.
+- `app.research.elder.signals`: `build_context(bars_15m, bars_6h, bars_1w, params) -> SignalContext` (fields include `bars_15m`, `bars_6h` aligned with `None` holes, `close_times_6h`, `atr_6h`, `impulse_6h`, `wave_long`, `wave_short`, `bars_1w`, `close_times_1w`, `tide_dir_1w`, `impulse_1w`, `params`). `tide_at(ctx, as_of) -> (direction, impulse)`, `tide_permits(ctx, d, as_of)`, `wave_active(ctx, d, as_of)`, `stop_for(ctx, direction, fill_price, as_of, params) -> (stop | None, reason | None)`, `generate_entries(coin, ctx, params) -> SignalResult`. `Entry(coin, direction, armed_time, fill_time, fill_index, fill_price, stop, r, atr_6h, wave_close_time, tide_close_time)`, `Dropped(coin, direction, fill_time, fill_price, reason)`, `SignalResult(entries, dropped, counts)`. `DROP_REASONS`: `no_6h_context`, `stop_wrong_side`, `stop_too_close_atr`, `costs_over_cap` (checked in that order). Direction is `+1` / `-1`.
+- Per-bar order of steps in `generate_entries`: cancel (tide or wave lost), expire, arm (only on the first 15m bar that sees a new 6H close), try fill. Fill when the bar trades strictly past the previous 15m bar's high (low), at `max(open, level)` (`min` for shorts); no level after a 15m hole. Expiry counts bars tried, including a bar with no level.
+- Positions are not tracked: every fill is emitted; the E5 runner skips fills while a position on that coin is open. `generate_entries` raises if its tide or wave params differ from the context's.
+- `Entry.wave_close_time` and `tide_close_time` are the 6H and 1W bars visible at the fill bar.
+
+### Results
+- Synthetic test data (62 weeks of seeded random-walk 15m bars, about 0.4% holes; EMA tide, stoch wave at 30, expiry 3): 229 arms, 186 fills, 43 expired, 0 cancelled, 185 entries, 1 dropped as `stop_too_close_atr`.
+- No-lookahead: truncation invariance holds at about 49 cut times (mid-6H, mid-week, exact boundaries, next to fills) for three parameter variants; distorting the in-progress 6H bar or week changes nothing before its close; a deliberately injected one-hour lookahead was caught by the test.
+- Full suite: 1839 passed, 1 failed (the owner's calendar CSV, as in E2).
+
+### Deferred to a later milestone
+- The E5 loader must give all three timeframes the same end; past the last 6H or 1W bar the last one stays "latest closed" -> E5.
+- Fills while a position is open are skipped by the runner -> E5.
+- Behaviour of the entry bar itself (the fill bar's range after the fill is unknown) -> E4.
+- Cancels never occurred on the synthetic data; they are covered only by the hand-built tests. Check the real cancel count in the first train report -> E5.
+
+### Deviations from the plan
+- Added `params.py` (not in the E0 module list) to hold `ElderParams` and the fixed constants, so E4 and E5 import them from one place.
+
+**Ambiguities**
+- The weekly Impulse veto can never fire once the tide is set. In any `tide_mode`, a tide of `+1` means a rising EMA or histogram, and an Impulse of `-1` needs both falling. It only blocks through a cold (`None`) Impulse. It is kept as Elder wrote it.
+- A 6H close that arrives while an order is pending is spent; it does not re-arm after a later fill or expiry.
+- `force2` uses a volume SMA that includes the current 6H bar.
