@@ -361,3 +361,53 @@ None.
 
 **Ambiguities**
 - Tuner reasoning (trials 3-5): with E[R] about 0.1R and per-trade spread about 1R, the week-bootstrap 5th percentile of ROI stays negative at any trade frequency; trading less only narrows the interval around zero, which is why the 27-trade trial wins the objective.
+
+## E6b - LLM tuning continued (trials 6-20)
+
+- Date: 2026-10-18
+- Model: Claude Fable 5.1 thinking high (same resumed tuner, same read-only inputs), Claude Opus 5.5 (ran each trial, checked the protocol)
+
+### Files created or modified
+- `repo/api/research_out/elder/trials.jsonl` - trials 6-20 appended, chain intact (20 trials, budget used up).
+- `repo/api/research_out/elder/train_0{06..20}_*.json/.md` - one report per trial.
+- `repo/api/research_out/elder/proposals/trial_0{06..20}.json` - the tuner's proposals as run.
+- `repo/api/research_out/elder/frozen.json` - replaced: trial 2 -> trial 17.
+
+### Contracts frozen
+- `frozen.json` = trial 17 (`params_hash` prefix `84a6bd1b`): `tide_mode` ema, `wave_osc` stoch, `wave_threshold` 25.0, `wave_block_impulse` true, `ripple_expiry_bars` 4, `stop_lookback_bars` 6, `stop_atr_buffer` 0.5, `min_stop_atr` 1.0, `t1_r` 2.0, `t1_share` 0.3, `be_after_t1` false, `trail_atr` 6.0.
+
+### Results
+
+| Trial | Change | Objective | ROI (90%) | Max DD | Closed | Trades/wk | P(T1) | E[R] |
+|---|---|---:|---|---:|---:|---:|---:|---:|
+| 6 | ema tide, force2 0.75, trial 4 exits | -0.111 | +7.6% [-11.1, +34.5] | 9.5% | 72 | 2.8 | 0.56 | +0.114 |
+| 7 | as 6, 40% at 2R, no BE, trail 5 | -0.146 | +12.1% [-14.6, +55.8] | 9.1% | 71 | 2.8 | 0.37 | +0.188 |
+| 8 | as 7, stoch 20 | -0.002 | +34.2% [-0.2, +107.7] | 3.8% | 54 | 2.1 | 0.54 | +0.570 |
+| 9 | as 8, stoch 30 | infeasible | +66.3% [-8.5, +487.7] | 21.7% | 216 | 8.7 | 0.39 | +0.335 |
+| 10 | as 8, stoch 25 | +0.021 | +54.4% [+2.1, +189.7] | 14.8% | 121 | 4.8 | 0.43 | +0.408 |
+| 11 | as 10, 50% at 1.5R, trail 4 | -0.025 | +41.6% [-2.5, +129.4] | 11.8% | 123 | 4.9 | 0.49 | +0.295 |
+| 12 | as 10, min stop 1.5 ATR | -0.025 | +14.3% [-2.5, +38.7] | 6.0% | 30 | 1.2 | 0.40 | +0.477 |
+| 13 | as 10, tide both | -0.081 | +27.2% [-8.1, +94.9] | 7.2% | 71 | 2.8 | 0.46 | +0.374 |
+| 14 | as 10, stoch 20, no Impulse block | -0.288 | +21.5% [-28.8, +181.3] | 18.2% | 204 | 8.0 | 0.30 | +0.138 |
+| 15 | as 10, ripple expiry 2 | -0.052 | +39.4% [-5.2, +141.0] | 14.9% | 104 | 4.1 | 0.44 | +0.359 |
+| 16 | as 10, stoch 28 | -0.013 | +82.7% [-1.3, +478.4] | 15.4% | 177 | 7.1 | 0.42 | +0.435 |
+| 17 | as 10, 30% at 2R, trail 6 | **+0.029** | +71.0% [+2.9, +301.8] | 15.2% | 120 | 4.8 | 0.42 | +0.549 |
+| 18 | as 17, stop 8 bars + 0.75 ATR | +0.018 | +76.8% [+1.8, +370.9] | 18.1% | 156 | 6.2 | 0.42 | +0.470 |
+| 19 | as 17, min stop 0.75 ATR | +0.023 | +81.0% [+2.3, +441.6] | 17.6% | 150 | 6.0 | 0.44 | +0.522 |
+| 20 | as 17, stoch 22 | +0.029 | +62.4% [+2.9, +239.6] | 8.0% | 75 | 3.0 | 0.48 | +0.745 |
+
+- Trial 17 has the best objective (+0.0294). Its neighbours (10, 16, 18, 19, 20) all land between -0.013 and +0.029, so it sits on a plateau, not a spike.
+- Trial 17 by sub-window: Jan-Apr ROI +54.4% (77 trades, E[R] +0.67, DD 8.0%), May-Jun +10.8% (43 trades, E[R] +0.33, median R -1.03, DD 15.2%). `random_tide`: mean ROI +17.2%, max +41.7%, mean DD 29.6%; no seed reaches the strategy's ROI or E[R].
+- Trial 20 ties on objective (+0.0290) with half the drawdown, but its May-Jun window loses (ROI -4.5%, E[R] -0.27 on 21 trades); its edge is all Jan-Apr. Trial 17 is positive in both windows.
+- What carries the edge: the stoch wave entry at 20-28, the Impulse block (trial 14 without it: -0.288) and the EMA tide (trial 13 with `both`: lost May-Jun). Exits that keep a long runner (30-40% at 2R, trail 5-6 ATR) beat early profit taking.
+- Concentration risk (tuner's read of `train_017_*.md`): nine trades beyond 5R make up about the whole net R; ETH, SOL and DOGE give about 90% of ROI; BNB, ADA and LINK are flat or negative.
+
+### Deferred to a later milestone
+- Holdout run with `frozen.json`, once -> E7 (owner to confirm).
+
+### Deviations from the plan
+- Owner lifted the "three trials in a row without improvement" stop after E6 and asked to use the full 20-trial budget.
+- `frozen.json` (trial 2) was deleted by hand and re-frozen from trial 17 with `--freeze --trial 17`. The holdout had never been run (no `holdout_log.jsonl`), so no holdout information reached the choice.
+
+**Ambiguities**
+- With 20 trials on one 26-week window, the best objective is partly selection; the holdout is the real test. Judge it on drawdown and on whether >5R winners still show up, not on ROI alone.
