@@ -17,7 +17,7 @@ Test one new hypothesis offline: Elder's Triple Screen as a single **position** 
 | E4 Simulator (T1 partial, breakeven, trailing, 10R cap, tide exit, costs, funding, censoring) | done (98 tests, Bugbot clean) | see git log |
 | E5 Runner (read-only load, report, baselines, `trials.jsonl`, holdout lock) | done (smoke train: E[R] +0.33 at 6.3 trades/week, infeasible; random tide +0.28) | see git log |
 | V2a Timeframes 30m / 4H / 1D in resample, signals, simulator | done (Bugbot clean) | see git log |
-| V2b Runner: pyramiding up to 5 per coin, compounding 1% risk, ROI objective | pending | - |
+| V2b Runner: pyramiding up to 5 per coin, compounding 1% risk, ROI objective | done (smoke train, defaults: ROI -48%, max DD 75%, infeasible; random tide -31%) | see git log |
 | E6 LLM tuning on Jan-Jun (budget 20 trials), freeze `frozen.json` | pending | - |
 | E7 Holdout Jul-Oct, once; comparison report | pending | - |
 
@@ -89,7 +89,7 @@ Subagents do not see the chat. Each brief names the milestone, points to this fi
 
 ## Next step
 
-0. V2a then V2b (rule change v2 above). V2a: Sonnet 5.5 high, then Bugbot. V2b: Grok 4.7 High Fast, then Bugbot. Then a new smoke train run before E6. Points 1-2 below then apply with the v2 objective.
+0. V2a and V2b are done. Under v2 the defaults lose 48% with a 75% drawdown at about 20 trades a week (E[R] -0.07). The tuner's first job is to get the drawdown under 20%: fewer, better trades through the wave threshold, the stop floor and the tide mode. Point 2 below (1-3 trades/week) no longer applies.
 1. E6: tuning. Trial 1 is `params_default.json` (from `repo/api`: `python -m app.research.elder.run --period train --params app/research/elder/params_default.json`). Then the tuner subagent (Fable 5.1 thinking high) proposes one `params.json` per turn from the train reports, `params_space.json` and `trials.jsonl` only. The orchestrator runs each one, checks the protocol, and stops at 20 trials or after three in a row without a better objective. It then freezes the best trial by objective with `--freeze --trial N`.
 2. The defaults trade 6.3 times a week; the first job is getting to 1-3 a week through the wave threshold and the stop floor without losing the E[R] lower bound.
 3. E7 holdout once, per the plan. Keep the live worker running meanwhile; this research does not need it stopped.

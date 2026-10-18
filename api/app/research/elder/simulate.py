@@ -62,7 +62,7 @@ from __future__ import annotations
 import bisect
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from app.research.elder.params import COST_ROUND_TRIP, T2_R, ElderParams
@@ -89,6 +89,9 @@ class PartExit:
     stop_kind: str | None
     gapped: bool
     ambiguous: bool
+    # Net R of this closed part: price R, minus cost R, plus funding R.
+    # ``simulate_trade`` sets it. The walk leaves the default; funding is not known there.
+    r: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -303,6 +306,25 @@ def _walk(entry: Entry, ctx: SignalContext, params: ElderParams, end_time: datet
         k = nxt
 
 
+def _with_part_r(
+    part: PartExit,
+    direction: int,
+    entry_price: float,
+    unit_r: float,
+    fill_time: datetime,
+    funding: Sequence[FundingPrint],
+) -> PartExit:
+    """Price, cost and funding R of one closed part. Same funding rule as ``simulate_trade``."""
+    price_r = part.share * direction * (part.price - entry_price) / unit_r
+    cost_r = part.share * COST_ROUND_TRIP * entry_price / unit_r
+    paid: list[float] = []
+    for item in funding:
+        if fill_time < item.funding_time < part.time:
+            notional = entry_price if item.mark_price is None else item.mark_price
+            paid.append(part.share * direction * item.rate * notional / unit_r)
+    return replace(part, r=price_r - cost_r - math.fsum(paid))
+
+
 def simulate_trade(
     entry: Entry,
     ctx: SignalContext,
@@ -315,7 +337,7 @@ def simulate_trade(
     d = entry.direction
     e = entry.fill_price
     r = entry.r
-    exits = tuple(walk.exits)
+    exits = tuple(_with_part_r(part, d, e, r, entry.fill_time, funding) for part in walk.exits)
     censored = walk.censor_reason is not None
 
     price_r = math.fsum(x.share * d * (x.price - e) / r for x in exits)

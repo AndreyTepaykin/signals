@@ -278,3 +278,48 @@ None.
 
 ### Deviations from the plan
 - Timeframes changed by the owner (rule change v2).
+
+## V2b - Pyramiding, compounding sizing, ROI objective
+
+- Date: 2026-10-18
+- Model: Grok 4.7 High Fast (implementer), Bugbot (review: no bugs), Claude Opus 5.5 (diff review of the pyramid rule and the equity run)
+
+### Files created or modified
+- `repo/api/app/research/elder/params.py` - `MAX_OPEN_PER_COIN = 5`, `RISK_PER_TRADE = 0.01`, `MAX_DRAWDOWN_LIMIT = 0.20`, `ROI_BOOTSTRAP_SEED = 20261018`, `ROI_BOOTSTRAP_RESAMPLES = 2000`.
+- `repo/api/app/research/elder/simulate.py` - additive `PartExit.r` (net R of the part); every other output unchanged.
+- `repo/api/app/research/elder/report.py`, `run.py` - pyramid rule, equity run, ROI, objective, baselines, trial record, markdown.
+- `repo/api/tests/test_elder_params.py`, `test_elder_simulate.py`, `test_elder_report.py`, `test_elder_run.py`.
+
+### Contracts frozen
+- `report.apply_pyramiding(entries, simulate, *, max_open=MAX_OPEN_PER_COIN, limit=None)` is the only position rule, used by the strategy and `random_tide`. A taken trade is open for an entry while `last_index >= entry.fill_index`. Skips in order: `skipped_opposite`, `skipped_max_open`, `skipped_overlap` (long stop below the highest open long entry; touching allowed), summed as `skipped_total`.
+- `report.run_equity(trades, start, end) -> EquityResult(equity, roi, max_drawdown_equity, max_open, mean_open, pnl_by_coin, max_open_by_coin, risk_by_id)`: equity starts at 1.0; each trade risks `RISK_PER_TRADE` x equity at its fill; a part exit adds risk x `part.r` at `part.time`; at equal times exits come before fills. Censored open shares never move equity.
+- `report.roi_interval(trades, start, end)`: 7-day blocks from the window start (empty weeks included), trades by fill week, 2000 resamples, statistic `prod(1 + RISK_PER_TRADE x total_r) - 1`, 5th and 95th percentiles. It approximates concurrent compounding as sequential.
+- `objective` = lower bound of `roi_interval` when `max_drawdown_equity <= 0.20`, else `None`. The trades/week condition is gone.
+- `trials.jsonl` records: `objective`, `objective_feasible`, `roi`, `roi_interval`, `max_drawdown_equity`, `e_r`, `e_r_interval`, `n_closed`, `n_censored`, `trades_per_week`, `p_t1`, `p_t2`, `report`, plus the unchanged id, chain and params fields.
+- Sub-windows run their own equity from 1.0 over trades filled inside them, including those trades' later exits.
+
+### Results
+- Smoke train run, v2 rules, `params_default.json` (43 s; output deleted, `trials.jsonl` still empty):
+
+| Window | ROI | ROI 90% | Max DD | Closed | Trades/week | P(T1) | P(10R) | E[R] (90%) |
+|---|---:|---|---:|---:|---:|---:|---:|---|
+| Train | -48.1% | [-83.2%, +184.9%] | 75.3% | 505 | 19.7 | 0.384 | 0.036 | -0.074 [-0.187, +0.035] |
+| Jan-Apr | -53.8% | [-81.5%, +94.0%] | 73.6% | 370 | 21.6 | 0.359 | 0.030 | -0.164 [-0.283, -0.037] |
+| May-Jun | +12.5% | [-40.1%, +244.4%] | 21.2% | 135 | 15.8 | 0.452 | 0.052 | +0.171 [-0.071, +0.417] |
+
+- Funnel (train): 1799 arms, 1644 fills, 155 expired, 0 cancelled, 856 entries; skipped 1 opposite, 0 max open, 347 overlap; 508 trades (3 censored). Max 23 trades open at once across the portfolio, 3.74 on average.
+- `random_tide` mean ROI -31.3%; 80% of its seeds did at least as well as the strategy.
+- Objective: not feasible on any window (drawdown above 20%).
+- Full suite: 1998 passed, 1 failed (the owner's calendar CSV).
+
+### Deferred to a later milestone
+- Tuning under the v2 objective -> E6.
+- `signals.py` docstrings still say "one position per coin" (the runner, not signals, enforces positions) -> fix when next touched.
+
+### Deviations from the plan
+- Rule change v2 (owner).
+
+**Ambiguities**
+- `PartExit.r` is filled in `simulate_trade` (the walk does not see funding).
+- Exits sharing a timestamp are ordered by coin, fill index, part index; final equity does not depend on it, the drawdown path can.
+- A censored trade counts as open until the window end in the open-trade average.

@@ -35,6 +35,14 @@ FORCE_PERIOD = 2
 VOLUME_SMA = 20
 COST_ROUND_TRIP = 0.0012
 MAX_COST_R = 0.1
+# Up to five open trades per coin, same direction, non-overlapping risk zones.
+MAX_OPEN_PER_COIN = 5
+# Fraction of portfolio equity risked on each new fill. Equity starts at 1.
+RISK_PER_TRADE = 0.01
+# Objective is feasible only when realized equity drawdown is at or under this.
+MAX_DRAWDOWN_LIMIT = 0.20
+ROI_BOOTSTRAP_SEED = 20261018
+ROI_BOOTSTRAP_RESAMPLES = 2000
 
 TIDE_MODES = ('ema', 'macd', 'both')
 WAVE_OSCS = ('force2', 'stoch', 'elder_ray')

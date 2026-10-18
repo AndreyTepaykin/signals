@@ -106,6 +106,15 @@ def test_trials_jsonl_is_append_only_and_a_broken_chain_is_refused(tmp_path, mon
     assert len(lines) == 1 and lines[0].endswith(b'\n')
     obj = json.loads(lines[0])
     assert obj['trial_id'] == 1 and obj['prev_sha256'] is None and obj['period'] == 'train'
+    for key in (
+        'objective', 'objective_feasible', 'roi', 'roi_interval', 'max_drawdown_equity',
+        'e_r', 'e_r_interval', 'n_closed', 'n_censored', 'trades_per_week', 'p_t1', 'p_t2', 'report',
+    ):
+        assert key in obj
+    assert obj['n_closed'] == 0 and obj['n_censored'] == 0
+    assert obj['e_r'] is None and obj['roi'] == 0.0 and obj['max_drawdown_equity'] == 0.0
+    assert obj['objective_feasible'] is True
+    assert obj['roi_interval'] == [0.0, 0.0]
     assert obj['start'].startswith('2026-01-01')
     assert obj['end'].startswith('2026-07-01')
     assert (out / obj['report']).is_file()

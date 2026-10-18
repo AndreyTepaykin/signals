@@ -3,10 +3,17 @@
 No database access. Bars that close after ``end`` are dropped before any
 indicator is built, so a bar past the period cannot move a number. Censored
 trades are listed with ``open_share`` and ``mark_r`` and are left out of E[R],
-the R distribution, profit factor and drawdown.
+the R distribution, profit factor and the R-curve drawdown. Their open share
+never moves equity; a closed part does.
 
-The tuning objective is the lower bound of the 90% bootstrap interval of E[R]
-on the whole window, and only when that window does 1 to 3 trades per week.
+Up to five trades may be open on one coin, all in one direction, with
+non-overlapping risk zones. Portfolio equity starts at 1 and compounds
+``RISK_PER_TRADE`` of equity at each fill, marked only on part exits.
+
+The tuning objective is the lower bound of the 90% week-block bootstrap of
+ROI when equity max drawdown is at most ``MAX_DRAWDOWN_LIMIT``. The bootstrap
+compounds sampled weeks in a sequence; that approximates concurrent
+compounding. There is no trades-per-week gate.
 """
 
 from __future__ import annotations
@@ -25,7 +32,14 @@ import numpy as np
 
 from app.core.stats.summary import bootstrap_interval, max_drawdown, profit_factor
 from app.research.elder.load import CoinData
-from app.research.elder.params import ElderParams
+from app.research.elder.params import (
+    MAX_DRAWDOWN_LIMIT,
+    MAX_OPEN_PER_COIN,
+    RISK_PER_TRADE,
+    ROI_BOOTSTRAP_RESAMPLES,
+    ROI_BOOTSTRAP_SEED,
+    ElderParams,
+)
 from app.research.elder.resample import to_1d, to_30m
 from app.research.elder.signals import (
     DROP_REASONS,
@@ -44,6 +58,7 @@ WEEK = timedelta(days=7)
 Z_90 = NormalDist().inv_cdf(0.95)
 RANDOM_SEEDS = tuple(range(20))
 HISTOGRAM_LABELS = ('<=-1', '(-1,0]', '(0,1]', '(1,2]', '(2,5]', '(5,10]', '>10')
+SKIP_REASONS = ('skipped_opposite', 'skipped_max_open', 'skipped_overlap')
 
 _COUNT_KEYS = (
     'arms',
@@ -103,7 +118,7 @@ class CoinResult:
     coin: str
     trades: list[Trade]
     dropped: list[Any]
-    skipped: list[Entry]
+    skipped: dict[str, list[Entry]]
     counts: dict[str, int]
     context: SignalContext = field(repr=False)
     funding: list[FundingPrint] = field(repr=False)
@@ -135,7 +150,7 @@ class CoinResult:
 
 @dataclass
 class PeriodResult:
-    """Trades taken under the one-position rule, plus the signal funnel."""
+    """Trades taken under the pyramid rule, plus the signal funnel."""
 
     start: datetime
     end: datetime
@@ -186,25 +201,85 @@ def _window_signal_counts(coin: str, ctx: SignalContext, start: datetime, end: d
     return window, entries, dropped, dict(full.counts), cache
 
 
+def _empty_skips() -> dict[str, list[Any]]:
+    return {reason: [] for reason in SKIP_REASONS}
+
+
+def _skip_reason(entry: Any, open_trades: Sequence[Any], max_open: int) -> str | None:
+    """First matching pyramid skip, or None when the entry may be taken.
+
+    An open trade is one the caller already decided is still open. Opposite
+    direction is checked before the cap, and the cap before the risk-zone
+    overlap. Touching zones are allowed: a long whose stop equals the highest
+    open entry is taken, and a short whose stop equals the lowest open entry.
+    """
+    if any(trade.direction != entry.direction for trade in open_trades):
+        return 'skipped_opposite'
+    if len(open_trades) >= max_open:
+        return 'skipped_max_open'
+    if not open_trades:
+        return None
+    if entry.direction == 1:
+        if entry.stop < max(trade.entry_price for trade in open_trades):
+            return 'skipped_overlap'
+    elif entry.stop > min(trade.entry_price for trade in open_trades):
+        return 'skipped_overlap'
+    return None
+
+
+def apply_pyramiding(
+    entries: Sequence[Any],
+    simulate: Callable[[Any], Any],
+    *,
+    max_open: int = MAX_OPEN_PER_COIN,
+    limit: int | None = None,
+) -> tuple[list[Any], dict[str, list[Any]]]:
+    """Walk entries in ``(fill_time, fill_index)`` order and take a pyramid.
+
+    A taken trade is open for a new entry when ``trade.last_index >= entry.fill_index``.
+    A trade that exits on the fill bar still counts as open. Skips are not
+    simulated. ``limit`` stops once that many trades have been taken (the
+    random-tide pack); further entries are neither taken nor counted as skips.
+
+    This is the only pyramid rule. The strategy and ``random_tide`` both call it.
+    """
+    taken: list[Any] = []
+    skipped = _empty_skips()
+    ordered = sorted(entries, key=lambda item: (item.fill_time, item.fill_index))
+    for entry in ordered:
+        if limit is not None and len(taken) >= limit:
+            break
+        open_trades = [trade for trade in taken if trade.last_index >= entry.fill_index]
+        reason = _skip_reason(entry, open_trades, max_open)
+        if reason is not None:
+            skipped[reason].append(entry)
+            continue
+        taken.append(simulate(entry))
+    return taken, skipped
+
+
 def _take_trades(
     entries: Sequence[Entry],
     ctx: SignalContext,
     params: ElderParams,
     funding: Sequence[FundingPrint],
     end: datetime,
-) -> tuple[list[Trade], list[Entry]]:
-    """One open position per coin. A fill at ``fill_index <= last_index`` is skipped."""
-    taken: list[Trade] = []
-    skipped: list[Entry] = []
-    last_index = -1
-    for entry in sorted(entries, key=lambda item: (item.fill_time, item.fill_index)):
-        if entry.fill_index <= last_index:
-            skipped.append(entry)
-            continue
-        trade = simulate_trade(entry, ctx, params, funding, end_time=end)
-        taken.append(trade)
-        last_index = trade.last_index
-    return taken, skipped
+) -> tuple[list[Trade], dict[str, list[Entry]]]:
+    """Pyramid on one coin. Same function the random-tide baseline packs with."""
+
+    def simulate(entry: Entry) -> Trade:
+        return simulate_trade(entry, ctx, params, funding, end_time=end)
+
+    return apply_pyramiding(entries, simulate)
+
+
+def _add_skips(counts: dict[str, int], skipped: Mapping[str, Sequence[Any]]) -> None:
+    total = 0
+    for reason in SKIP_REASONS:
+        count = len(skipped.get(reason, ()))
+        counts[reason] = count
+        total += count
+    counts['skipped_total'] = total
 
 
 def run_period(
@@ -216,9 +291,9 @@ def run_period(
     """Run one half-open window ``[start, end)`` over each coin.
 
     Higher-timeframe bars are built from source bars with ``close_time <= end``.
-    Entries with ``fill_time`` outside the window are ignored. While a position
-    is open, a later fill on that coin is counted as ``skipped_position_open``
-    and is not simulated.
+    Entries with ``fill_time`` outside the window are ignored. Fills that break
+    the pyramid rule are counted under ``skipped_opposite``, ``skipped_max_open``
+    or ``skipped_overlap`` and are not simulated.
     """
     start = _utc(start)
     end = _utc(end)
@@ -228,14 +303,15 @@ def run_period(
     trades: list[Trade] = []
     dropped: list[Any] = []
     totals = _zeros()
-    totals['skipped_position_open'] = 0
+    _add_skips(totals, _empty_skips())
     for coin in coin_data:
         ctx, funding = _prepare(coin, end, params)
         window_counts, entries, coin_dropped, full_counts, cache = _window_signal_counts(coin.coin, ctx, start, end)
         coin_trades, skipped = _take_trades(entries, ctx, params, funding, end)
-        if len(coin_trades) + len(skipped) != len(entries):
-            raise RuntimeError(f'{coin.coin} position rule did not account for every window entry')
-        window_counts['skipped_position_open'] = len(skipped)
+        kept = len(coin_trades) + sum(len(rows) for rows in skipped.values())
+        if kept != len(entries):
+            raise RuntimeError(f'{coin.coin} pyramid rule did not account for every window entry')
+        _add_skips(window_counts, skipped)
         per_coin[coin.coin] = CoinResult(
             coin=coin.coin,
             trades=coin_trades,
@@ -257,19 +333,21 @@ def run_period(
 def subwindow_counts(period: PeriodResult, start: datetime, end: datetime) -> dict[str, int]:
     """Signal funnel of ``[start, end)`` plus skips whose fill falls in the window.
 
-    Skips come from the position walk of the whole :func:`run_period` window, so
-    a May fill blocked by a January position counts in May.
+    Skips come from the pyramid walk of the whole :func:`run_period` window, so
+    a May fill blocked by a January trade counts in May.
     """
     start = _utc(start)
     end = _utc(end)
     totals = _zeros()
-    totals['skipped_position_open'] = 0
+    _add_skips(totals, _empty_skips())
     for coin in period.per_coin.values():
         signal = coin.signal_counts_between(start, end)
-        skipped = sum(1 for entry in coin.skipped if start <= entry.fill_time < end)
         for key, value in signal.items():
             totals[key] = totals.get(key, 0) + value
-        totals['skipped_position_open'] += skipped
+        for reason in SKIP_REASONS:
+            count = sum(1 for entry in coin.skipped.get(reason, ()) if start <= entry.fill_time < end)
+            totals[reason] += count
+            totals['skipped_total'] += count
     return totals
 
 
@@ -339,9 +417,176 @@ def _mean_closed(trades: Sequence[Trade]) -> float | None:
 
 def _funnel(counts: Mapping[str, int], n_trades: int) -> dict[str, int]:
     funnel = {key: int(counts.get(key, 0)) for key in _COUNT_KEYS}
-    funnel['skipped_position_open'] = int(counts.get('skipped_position_open', 0))
+    for reason in SKIP_REASONS:
+        funnel[reason] = int(counts.get(reason, 0))
+    funnel['skipped_total'] = int(counts.get('skipped_total', sum(funnel[reason] for reason in SKIP_REASONS)))
     funnel['trades'] = n_trades
     return funnel
+
+
+def _week_count(start: datetime, end: datetime) -> int:
+    """Consecutive 7-day blocks from ``start`` covering ``[start, end)``, including a short tail."""
+    span = end - start
+    count = int(span / WEEK)
+    if start + count * WEEK < end:
+        count += 1
+    return count
+
+
+def _week_index(fill: datetime, start: datetime, n_weeks: int) -> int:
+    index = int((fill - start) / WEEK)
+    if index < 0 or index >= n_weeks:
+        raise RuntimeError(f'fill {fill.isoformat()} is outside week blocks of [{start.isoformat()}, +{n_weeks}w)')
+    return index
+
+
+def roi_interval(trades: Sequence[Trade], start: datetime, end: datetime) -> list[float] | None:
+    """90% block-bootstrap interval of sequential ROI.
+
+    Weeks are consecutive 7-day blocks from ``start``. Empty weeks are in the
+    pool, and so is a short final block. Each trade is assigned to the week of
+    its ``fill_time``. A resample draws that many weeks with replacement
+    (``ROI_BOOTSTRAP_RESAMPLES`` draws, seed ``ROI_BOOTSTRAP_SEED``). The
+    statistic is ``product(1 + RISK_PER_TRADE * trade.total_r) - 1`` over the
+    sampled weeks' trades. ``total_r`` already covers closed shares only, so a
+    censored trade contributes its closed parts and not its open share.
+
+    Multiplying those factors in a sequence approximates the concurrent
+    compounding of the equity path, where several open trades share one clock.
+    The interval is the 5th and 95th percentiles of the resamples.
+    """
+    start = _utc(start)
+    end = _utc(end)
+    n_weeks = _week_count(start, end)
+    if n_weeks <= 0:
+        return None
+    buckets: list[list[Trade]] = [[] for _ in range(n_weeks)]
+    for trade in trades:
+        if start <= trade.fill_time < end:
+            buckets[_week_index(trade.fill_time, start, n_weeks)].append(trade)
+    rng = np.random.default_rng(ROI_BOOTSTRAP_SEED)
+    draws = rng.integers(0, n_weeks, size=(ROI_BOOTSTRAP_RESAMPLES, n_weeks))
+    stats = np.empty(ROI_BOOTSTRAP_RESAMPLES, dtype=float)
+    for index, draw in enumerate(draws):
+        factor = 1.0
+        for week_i in draw:
+            for trade in buckets[int(week_i)]:
+                factor *= 1.0 + RISK_PER_TRADE * trade.total_r
+        stats[index] = factor - 1.0
+    low, high = np.quantile(stats, [0.05, 0.95])
+    return [float(low), float(high)]
+
+
+@dataclass(frozen=True)
+class EquityResult:
+    """Realized equity path of one window. ``risk_by_id`` keys are ``id(trade)``."""
+
+    equity: float
+    roi: float
+    max_drawdown_equity: float
+    max_open: int
+    mean_open: float
+    pnl_by_coin: dict[str, float]
+    max_open_by_coin: dict[str, int]
+    risk_by_id: dict[int, float]
+
+
+def _occupancy(trades: Sequence[Trade], start: datetime, end: datetime) -> tuple[int, float, dict[str, int]]:
+    """Max and time-weighted mean of trades open on ``[start, end)``.
+
+    A trade occupies ``[fill_time, closed_time)``. A censored trade, and any
+    trade with no close time, stays open until ``end``. Closes at the same
+    timestamp are applied before opens, so a trade that ends as another fills
+    does not overlap it. A fill and a close at the same timestamp add nothing
+    to the average.
+    """
+    events: list[tuple[datetime, int, str]] = []
+    for trade in trades:
+        raw_close = end if trade.censored or trade.closed_time is None else trade.closed_time
+        open_at = trade.fill_time if trade.fill_time > start else start
+        close_at = raw_close if raw_close < end else end
+        if open_at >= close_at:
+            continue
+        events.append((open_at, 1, trade.coin))
+        events.append((close_at, -1, trade.coin))
+    events.sort(key=lambda item: (item[0], item[1], item[2]))
+    count = 0
+    by_coin: dict[str, int] = {}
+    max_count = 0
+    max_by: dict[str, int] = {}
+    integral = 0.0
+    prev = start
+    for time, delta, coin in events:
+        if time > prev:
+            integral += count * (time - prev).total_seconds()
+            prev = time
+        count += delta
+        by_coin[coin] = by_coin.get(coin, 0) + delta
+        if count > max_count:
+            max_count = count
+        current = by_coin[coin]
+        if current > max_by.get(coin, 0):
+            max_by[coin] = current
+    if end > prev:
+        integral += count * (end - prev).total_seconds()
+    duration = (end - start).total_seconds()
+    mean = 0.0 if duration <= 0.0 else integral / duration
+    return max_count, mean, max_by
+
+
+def run_equity(trades: Sequence[Trade], start: datetime, end: datetime) -> EquityResult:
+    """Compound ``RISK_PER_TRADE`` of equity at each fill. Equity starts at 1.
+
+    Events are processed in time order across coins. At one timestamp every
+    part exit is applied before any fill, so a fill sees equity after the
+    exits that share its time. Among exits at the same timestamp the order is
+    coin, then fill index, then part index: the final equity does not depend
+    on that order, the path drawdown can.
+
+    A part exit adds ``risk_amount * part.r`` at ``part.time``. The open share
+    of a censored trade has no exit and does not move equity. ``roi`` is the
+    final equity minus 1. ``max_drawdown_equity`` is the largest
+    ``(peak - equity) / peak`` along that path, peak included.
+    """
+    start = _utc(start)
+    end = _utc(end)
+    events: list[tuple[datetime, int, str, int, int, int, Trade]] = []
+    for trade_i, trade in enumerate(trades):
+        events.append((trade.fill_time, 1, trade.coin, trade.fill_index, trade_i, -1, trade))
+        for part_i, _part in enumerate(trade.exits):
+            events.append((_part.time, 0, trade.coin, trade.fill_index, trade_i, part_i, trade))
+    events.sort(key=lambda item: (item[0], item[1], item[2], item[3], item[4], item[5]))
+    equity = 1.0
+    peak = 1.0
+    max_dd = 0.0
+    risk_by_id: dict[int, float] = {}
+    pnl_terms: dict[str, list[float]] = {}
+    for _time, kind, _coin, _fill_index, trade_i, part_i, trade in events:
+        if kind == 1:
+            risk_by_id[id(trade)] = RISK_PER_TRADE * equity
+            continue
+        risk = risk_by_id.get(id(trade))
+        if risk is None:
+            raise RuntimeError(f'{trade.coin} part exit at {_time.isoformat()} has no fill yet')
+        part = trade.exits[part_i]
+        delta = risk * part.r
+        equity += delta
+        pnl_terms.setdefault(trade.coin, []).append(delta)
+        if equity > peak:
+            peak = equity
+        if peak > 0.0:
+            max_dd = max(max_dd, (peak - equity) / peak)
+    max_open, mean_open, max_by = _occupancy(trades, start, end)
+    return EquityResult(
+        equity=equity,
+        roi=equity - 1.0,
+        max_drawdown_equity=max_dd,
+        max_open=max_open,
+        mean_open=mean_open,
+        pnl_by_coin={coin: float(math.fsum(terms)) for coin, terms in pnl_terms.items()},
+        max_open_by_coin=max_by,
+        risk_by_id=risk_by_id,
+    )
 
 
 def summarize(
@@ -350,13 +595,14 @@ def summarize(
     end: datetime,
     counts: Mapping[str, int],
 ) -> dict[str, Any]:
-    """One window: rates, E[R] on closed trades only, the funnel, the objective.
+    """One window: rates, E[R] on closed trades, equity ROI, the funnel, the objective.
 
-    ``objective`` is the 90% E[R] lower bound when ``1 <= trades_per_week <= 3``
-    and the interval exists (at least two closed trades). Otherwise it is
-    ``None`` and ``objective_feasible`` is false. The trial log uses this for
-    the whole train across all coins; the same formula is reported on every
-    slice so a sub-window can be read the same way.
+    Equity is its own run from 1.0 on ``trades`` (a sub-window passes only the
+    trades whose fill is inside it, including part exits after the window).
+    ``objective`` is the lower bound of :func:`roi_interval` when
+    ``max_drawdown_equity <= MAX_DRAWDOWN_LIMIT``. Otherwise it is ``None``
+    and ``objective_feasible`` is false. The trial log uses the whole-train
+    figure; every slice reports the same formula.
     """
     start = _utc(start)
     end = _utc(end)
@@ -381,10 +627,13 @@ def summarize(
     per_week = (n_closed + n_censored) / weeks
     fills = int(counts.get('fills', 0))
     floor_drops = int(counts.get('dropped_stop_too_close_atr', 0)) + int(counts.get('dropped_costs_over_cap', 0))
-    feasible = e_r_interval is not None and 1.0 <= per_week <= 3.0
+    equity = run_equity(trades, start, end)
+    roi_band = roi_interval(trades, start, end)
+    feasible = roi_band is not None and equity.max_drawdown_equity <= MAX_DRAWDOWN_LIMIT
     return {
         'n_closed': n_closed,
         'n_censored': n_censored,
+        'n_trades': n_closed + n_censored,
         'weeks': weeks,
         'trades_per_week': per_week,
         'p_t1': _proportion([trade.hit_t1 for trade in closed]),
@@ -395,6 +644,11 @@ def summarize(
         'profit_factor': None if pf is None else float(pf),
         'profit_factor_note': pf_note,
         'max_drawdown': float(max_drawdown(values)),
+        'roi': equity.roi,
+        'roi_interval': roi_band,
+        'max_drawdown_equity': equity.max_drawdown_equity,
+        'max_open': equity.max_open,
+        'mean_open': equity.mean_open,
         'r_quantiles': _quantiles(values),
         'r_histogram': _histogram(values),
         'hold_hours_mean': None if not hours else float(statistics.fmean(hours)),
@@ -402,7 +656,7 @@ def summarize(
         'funnel': _funnel(counts, n_closed + n_censored),
         'min_distance_drop_rate': None if fills == 0 else floor_drops / fills,
         'censored_trades': [_censored_row(trade) for trade in censored],
-        'objective': None if not feasible else e_r_interval[0],
+        'objective': None if not feasible else roi_band[0],
         'objective_feasible': feasible,
     }
 
@@ -423,17 +677,23 @@ def _censored_row(trade: Trade) -> dict[str, Any]:
 
 
 def no_trade_baseline() -> dict[str, Any]:
-    """Do nothing. E[R] is 0 because no capital is at risk; there are no trades."""
-    return {'name': 'no_trade', 'e_r': 0.0, 'n_closed': 0, 'n_censored': 0, 'trades_per_week': 0.0}
+    """Do nothing. Equity stays at 1, so ROI and drawdown are 0. E[R] is 0."""
+    return {
+        'name': 'no_trade',
+        'e_r': 0.0,
+        'roi': 0.0,
+        'max_drawdown_equity': 0.0,
+        'n_closed': 0,
+        'n_censored': 0,
+        'trades_per_week': 0.0,
+    }
 
 
 def pack_until_count(entries: Sequence[Any], target: int, rng: random.Random, simulate: Callable[[Any], Any]) -> list[Any]:
-    """Draw entries uniformly (a shuffle) and pack them in time order.
+    """Draw entries uniformly (a shuffle) and pack them with :func:`apply_pyramiding`.
 
-    A prefix of the random permutation is grown until the time-ordered
-    one-position pack has ``target`` trades, or the pool runs out. A candidate
-    whose ``fill_index`` is at or before the previous taken trade's
-    ``last_index`` is skipped. The result never exceeds ``target``.
+    A prefix of the random permutation is grown until the pyramid has ``target``
+    trades, or the pool runs out. The result never exceeds ``target``.
     """
     if target <= 0 or not entries:
         return []
@@ -442,24 +702,10 @@ def pack_until_count(entries: Sequence[Any], target: int, rng: random.Random, si
     size = min(len(order), target)
     packed: list[Any] = []
     while True:
-        packed = _pack_time_order(order[:size], target, simulate)
+        packed, _skipped = apply_pyramiding(order[:size], simulate, limit=target)
         if len(packed) >= target or size >= len(order):
             return packed
         size = min(len(order), size * 2)
-
-
-def _pack_time_order(entries: Sequence[Any], target: int, simulate: Callable[[Any], Any]) -> list[Any]:
-    taken: list[Any] = []
-    last_index = -1
-    for entry in sorted(entries, key=lambda item: (item.fill_time, item.fill_index)):
-        if entry.fill_index <= last_index:
-            continue
-        trade = simulate(entry)
-        taken.append(trade)
-        last_index = trade.last_index
-        if len(taken) >= target:
-            break
-    return taken
 
 
 def _tide_entries(coin: str, ctx: SignalContext, params: ElderParams, start: datetime, end: datetime) -> list[Entry]:
@@ -510,13 +756,13 @@ def random_tide_baseline(
     *,
     seeds: Sequence[int] = RANDOM_SEEDS,
 ) -> dict[str, Any]:
-    """Random entries in the tide's direction, same stop and the same exits.
+    """Random entries in the tide's direction, same stop, exits, pyramid and equity.
 
-    Each seed draws candidates uniformly and packs them in time under the
-    one-position rule, stopping at the number of trades the strategy took on
-    that coin. E[R] is the mean ``total_r`` of closed trades across coins.
-    Seeds are 0..19 unless the caller passes another sequence. The same seed
-    repeats the same trades.
+    Each seed draws candidates uniformly and packs them with
+    :func:`apply_pyramiding`, stopping at the number of trades the strategy
+    took on that coin. ROI uses the same compounding equity run. E[R] is the
+    mean ``total_r`` of closed trades across coins. Seeds are 0..19 unless the
+    caller passes another sequence. The same seed repeats the same trades.
     """
     viable: dict[str, list[Entry]] = {}
     targets: dict[str, int] = {}
@@ -536,7 +782,10 @@ def random_tide_baseline(
             cache[entry.fill_index] = hit
         return hit
 
+    strategy_equity = run_equity(period.trades, period.start, period.end)
     per_seed_e_r: list[float | None] = []
+    per_seed_roi: list[float] = []
+    per_seed_dd: list[float] = []
     per_seed_ids: list[list[list[Any]]] = []
     per_seed_counts: list[dict[str, int]] = []
     for seed in seeds:
@@ -554,36 +803,78 @@ def random_tide_baseline(
             seed_trades.extend(packed)
         per_seed_counts.append(counts)
         per_seed_e_r.append(_mean_closed(seed_trades))
+        seed_equity = run_equity(seed_trades, period.start, period.end)
+        per_seed_roi.append(seed_equity.roi)
+        per_seed_dd.append(seed_equity.max_drawdown_equity)
         per_seed_ids.append(
             [[trade.coin, _iso(trade.fill_time), trade.direction, trade.fill_index, trade.last_index] for trade in seed_trades]
         )
-    return _baseline_summary(per_seed_e_r, per_seed_ids, per_seed_counts, _mean_closed(period.trades), len(seeds))
+    return _baseline_summary(
+        per_seed_e_r,
+        per_seed_roi,
+        per_seed_dd,
+        per_seed_ids,
+        per_seed_counts,
+        _mean_closed(period.trades),
+        strategy_equity.roi,
+        len(seeds),
+    )
+
+
+def _spread(values: Sequence[float]) -> dict[str, float | None]:
+    if not values:
+        return {'mean': None, 'min': None, 'median': None, 'max': None}
+    return {
+        'mean': float(statistics.fmean(values)),
+        'min': float(min(values)),
+        'median': float(statistics.median(values)),
+        'max': float(max(values)),
+    }
 
 
 def _baseline_summary(
     per_seed_e_r: Sequence[float | None],
+    per_seed_roi: Sequence[float],
+    per_seed_dd: Sequence[float],
     per_seed_ids: Sequence[list[list[Any]]],
     per_seed_counts: Sequence[Mapping[str, int]],
     strategy_e_r: float | None,
+    strategy_roi: float,
     n_seeds: int,
 ) -> dict[str, Any]:
     defined = [value for value in per_seed_e_r if value is not None]
+    e_r = _spread(defined)
+    roi = _spread(list(per_seed_roi))
     if strategy_e_r is None or n_seeds == 0:
         share = None
     else:
         share = sum(1 for value in per_seed_e_r if value is not None and value >= strategy_e_r) / n_seeds
+    if n_seeds == 0:
+        share_roi = None
+        dd_mean = None
+    else:
+        share_roi = sum(1 for value in per_seed_roi if value >= strategy_roi) / n_seeds
+        dd_mean = float(statistics.fmean(per_seed_dd))
     return {
         'name': 'random_tide',
         'n_seeds': n_seeds,
         'per_seed_e_r': list(per_seed_e_r),
+        'per_seed_roi': list(per_seed_roi),
         'per_seed_trade_ids': per_seed_ids,
         'per_seed_trade_counts': [dict(item) for item in per_seed_counts],
-        'e_r_mean': None if not defined else float(statistics.fmean(defined)),
-        'e_r_min': None if not defined else float(min(defined)),
-        'e_r_median': None if not defined else float(statistics.median(defined)),
-        'e_r_max': None if not defined else float(max(defined)),
+        'e_r_mean': e_r['mean'],
+        'e_r_min': e_r['min'],
+        'e_r_median': e_r['median'],
+        'e_r_max': e_r['max'],
         'share_ge_strategy': share,
         'strategy_e_r': strategy_e_r,
+        'roi_mean': roi['mean'],
+        'roi_min': roi['min'],
+        'roi_median': roi['median'],
+        'roi_max': roi['max'],
+        'share_roi_ge_strategy': share_roi,
+        'strategy_roi': strategy_roi,
+        'max_drawdown_equity_mean': dd_mean,
     }
 
 
@@ -599,13 +890,21 @@ def build_report(
     subwindows: Sequence[tuple[str, datetime, datetime]] = (),
     seeds: Sequence[int] = RANDOM_SEEDS,
 ) -> dict[str, Any]:
-    """Overall, per coin, sub-windows, and both baselines. JSON-ready."""
+    """Overall, per coin, sub-windows, and both baselines. JSON-ready.
+
+    A sub-window is its own equity run from 1.0 on trades filled inside it.
+    Per-coin ``pnl_contribution`` is that coin's part of the portfolio equity
+    run (sum of risk amount times part R), not a standalone coin curve.
+    """
     period = run_period(coin_data, params, start, end)
+    portfolio = run_equity(period.trades, period.start, period.end)
     overall = summarize(period.trades, period.start, period.end, period.counts)
-    per_coin = {
-        name: summarize(coin.trades, period.start, period.end, coin.counts)
-        for name, coin in period.per_coin.items()
-    }
+    per_coin = {}
+    for name, coin in period.per_coin.items():
+        item = summarize(coin.trades, period.start, period.end, coin.counts)
+        item['pnl_contribution'] = float(portfolio.pnl_by_coin.get(name, 0.0))
+        item['max_open'] = int(portfolio.max_open_by_coin.get(name, 0))
+        per_coin[name] = item
     windows: dict[str, Any] = {}
     for label, sub_start, sub_end in subwindows:
         clipped_start = max(period.start, _utc(sub_start))
@@ -647,6 +946,15 @@ def _prop_line(label: str, block: Mapping[str, Any]) -> str:
     return f'{label} {_fmt(block.get("p"), ".3f")}  90% {_interval(block.get("interval"), ".3f")}  ({block.get("k")}/{block.get("n")})'
 
 
+def _roi_line(summary: Mapping[str, Any]) -> str:
+    return (
+        f"ROI {_fmt(summary['roi'], '+.3f')}  90% {_interval(summary.get('roi_interval'))}  "
+        f"max DD {_fmt(summary['max_drawdown_equity'], '.3f')}  "
+        f"objective {_fmt(summary.get('objective'), '+.3f')}  "
+        f"feasible {'yes' if summary.get('objective_feasible') else 'no'}"
+    )
+
+
 def _summary_lines(summary: Mapping[str, Any]) -> list[str]:
     funnel = summary['funnel']
     quantiles = summary['r_quantiles']
@@ -654,24 +962,25 @@ def _summary_lines(summary: Mapping[str, Any]) -> list[str]:
     q = '  '.join(f'{name} {_fmt(quantiles[name], "+.2f")}' for name in ('p10', 'p25', 'p50', 'p75', 'p90'))
     hist = '  '.join(f'{name} {histogram[name]}' for name in HISTOGRAM_LABELS)
     lines = [
+        _roi_line(summary),
+        f"max open {summary['max_open']}  mean open {_fmt(summary['mean_open'], '.2f')}",
         f"closed {summary['n_closed']}  censored {summary['n_censored']}  "
         f"trades/week {_fmt(summary['trades_per_week'], '.2f')}  weeks {_fmt(summary['weeks'], '.2f')}",
         _prop_line('P(T1)', summary['p_t1']),
         _prop_line('P(10R)', summary['p_t2']),
         _prop_line('P(stop before T1)', summary['p_stop_before_t1']),
         f"E[R] {_fmt(summary['e_r'], '+.3f')}  90% {_interval(summary['e_r_interval'])}  "
-        f"PF {_fmt(summary['profit_factor'], '.2f')}  max DD {_fmt(summary['max_drawdown'], '.2f')}R",
+        f"PF {_fmt(summary['profit_factor'], '.2f')}  max DD R {_fmt(summary['max_drawdown'], '.2f')}R",
         f"hold hours mean {_fmt(summary['hold_hours_mean'], '.1f')}  median {_fmt(summary['hold_hours_median'], '.1f')}",
         f'R quantiles  {q}',
         f'R histogram  {hist}',
         'funnel  ' + '  '.join(f'{key} {funnel[key]}' for key in (
-            'arms', 'fills', 'expired', 'cancelled', 'entries', 'skipped_position_open', 'trades',
+            'arms', 'fills', 'expired', 'cancelled', 'entries',
+            'skipped_opposite', 'skipped_max_open', 'skipped_overlap', 'skipped_total', 'trades',
         )),
         'drops  ' + '  '.join(f'{reason} {funnel[f"dropped_{reason}"]}' for reason in DROP_REASONS),
         f"min-distance drop rate {_fmt(summary['min_distance_drop_rate'], '.3f')}  "
         f"(stop_too_close_atr + costs_over_cap) / fills",
-        f"slice objective {_fmt(summary['objective'], '+.3f')}  "
-        f"feasible {'yes' if summary['objective_feasible'] else 'no'}",
     ]
     if summary['profit_factor_note']:
         lines.append(f"PF note  {summary['profit_factor_note']}")
@@ -679,14 +988,13 @@ def _summary_lines(summary: Mapping[str, Any]) -> list[str]:
 
 
 def render_markdown(report: Mapping[str, Any]) -> str:
-    """Compact text report. The tuning objective is the whole-window one."""
+    """Compact text report. The tuning objective is the whole-window ROI bound."""
     lines = [
         f"Elder Triple Screen  {report['start']} .. {report['end']}",
-        f"params {report['params_hash'][:8]}  "
-        f"objective {_fmt(report['objective'], '+.3f')}  "
-        f"feasible {'yes' if report['objective_feasible'] else 'no'}",
-        'Objective is the 90% E[R] lower bound on this window, all coins, '
-        'and only when trades/week is between 1 and 3. Censored trades are excluded from E[R].',
+        f"params {report['params_hash'][:8]}  {_roi_line(report['overall'])}",
+        'Objective is the 90% ROI lower bound when max equity drawdown is at most 20%. '
+        'The week bootstrap compounds trades sequentially and approximates concurrent compounding. '
+        'Censored open shares are not in equity. E[R] excludes censored trades.',
         '',
         'Overall',
         *('  ' + line for line in _summary_lines(report['overall'])),
@@ -702,23 +1010,31 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     lines.append('Per coin')
     for name, summary in report['per_coin'].items():
         lines.append(
-            f"  {name}  closed {summary['n_closed']}  censored {summary['n_censored']}  "
+            f"  {name}  n {summary['n_trades']}  "
+            f"pnl {_fmt(summary.get('pnl_contribution'), '+.4f')}  "
+            f"max open {summary['max_open']}  "
+            f"closed {summary['n_closed']}  censored {summary['n_censored']}  "
             f"trades/week {_fmt(summary['trades_per_week'], '.2f')}  "
             f"P(T1) {_fmt(summary['p_t1']['p'], '.3f')}  "
             f"E[R] {_fmt(summary['e_r'], '+.3f')} {_interval(summary['e_r_interval'])}"
         )
     base = report['baselines']
     random_tide = base['random_tide']
+    none = base['no_trade']
     lines.extend([
         '',
         'Baselines',
-        f"  no_trade  E[R] {_fmt(base['no_trade']['e_r'], '+.3f')}  trades 0",
+        f"  no_trade  ROI {_fmt(none['roi'], '+.3f')}  max DD {_fmt(none['max_drawdown_equity'], '.3f')}  "
+        f"E[R] {_fmt(none['e_r'], '+.3f')}  trades 0",
         f"  random_tide  seeds {random_tide['n_seeds']}  "
+        f"mean ROI {_fmt(random_tide['roi_mean'], '+.3f')}  "
+        f"min {_fmt(random_tide['roi_min'], '+.3f')}  "
+        f"median {_fmt(random_tide['roi_median'], '+.3f')}  "
+        f"max {_fmt(random_tide['roi_max'], '+.3f')}  "
+        f"share ROI >= strategy {_fmt(random_tide['share_roi_ge_strategy'], '.2f')}  "
+        f"mean DD {_fmt(random_tide['max_drawdown_equity_mean'], '.3f')}  "
         f"mean E[R] {_fmt(random_tide['e_r_mean'], '+.3f')}  "
-        f"min {_fmt(random_tide['e_r_min'], '+.3f')}  "
-        f"median {_fmt(random_tide['e_r_median'], '+.3f')}  "
-        f"max {_fmt(random_tide['e_r_max'], '+.3f')}  "
-        f"share >= strategy {_fmt(random_tide['share_ge_strategy'], '.2f')}",
+        f"share E[R] >= strategy {_fmt(random_tide['share_ge_strategy'], '.2f')}",
     ])
     censored = report['overall']['censored_trades']
     lines.append('')
@@ -734,5 +1050,22 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     return '\n'.join(lines) + '\n'
 
 
+def _baseline_roi_line(label: str, report: Mapping[str, Any]) -> list[str]:
+    none = report['baselines']['no_trade']
+    tide = report['baselines']['random_tide']
+    return [
+        f"{label}  {_roi_line(report['overall'])}",
+        f"{label} no_trade  ROI {_fmt(none['roi'], '+.3f')}  max DD {_fmt(none['max_drawdown_equity'], '.3f')}",
+        f"{label} random_tide  mean ROI {_fmt(tide['roi_mean'], '+.3f')}  "
+        f"min {_fmt(tide['roi_min'], '+.3f')}  "
+        f"median {_fmt(tide['roi_median'], '+.3f')}  "
+        f"max {_fmt(tide['roi_max'], '+.3f')}  "
+        f"share >= strategy {_fmt(tide['share_roi_ge_strategy'], '.2f')}  "
+        f"mean DD {_fmt(tide['max_drawdown_equity_mean'], '.3f')}",
+    ]
+
+
 def render_side_by_side(train: Mapping[str, Any], holdout: Mapping[str, Any]) -> str:
-    return '# Train\n\n' + render_markdown(train) + '\n# Holdout\n\n' + render_markdown(holdout)
+    """Train and holdout, with ROI and equity drawdown for both books and both baselines."""
+    header = ['# Train vs holdout', *_baseline_roi_line('train', train), *_baseline_roi_line('holdout', holdout), '']
+    return '\n'.join(header) + '\n# Train\n\n' + render_markdown(train) + '\n# Holdout\n\n' + render_markdown(holdout)

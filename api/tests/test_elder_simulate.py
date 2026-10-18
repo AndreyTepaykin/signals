@@ -723,7 +723,9 @@ def random_case(rng):
 def check_trade(t, walk, d, entry, bars, params, end):
     e, r = entry.fill_price, entry.r
     eps = 1e-9
-    assert t.exits == tuple(walk.exits)
+    # ``r`` is priced in simulate_trade (funding is not known to the walk).
+    assert tuple(replace(x, r=0.0) for x in t.exits) == tuple(walk.exits)
+    assert math.isclose(sum(part.r for part in t.exits), t.total_r, rel_tol=1e-9, abs_tol=1e-9)
     for x in t.exits:
         pr = d * (x.price - e) / r
         assert pr <= T2_R + eps

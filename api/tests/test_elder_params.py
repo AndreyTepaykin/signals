@@ -38,6 +38,11 @@ def test_fixed_constants():
     assert params_module.VOLUME_SMA == 20
     assert params_module.COST_ROUND_TRIP == 0.0012
     assert params_module.MAX_COST_R == 0.1
+    assert params_module.MAX_OPEN_PER_COIN == 5
+    assert params_module.RISK_PER_TRADE == 0.01
+    assert params_module.MAX_DRAWDOWN_LIMIT == 0.20
+    assert params_module.ROI_BOOTSTRAP_SEED == 20261018
+    assert params_module.ROI_BOOTSTRAP_RESAMPLES == 2000
 
 
 def test_from_dict_round_trip():
