@@ -411,3 +411,41 @@ None.
 
 **Ambiguities**
 - With 20 trials on one 26-week window, the best objective is partly selection; the holdout is the real test. Judge it on drawdown and on whether >5R winners still show up, not on ROI alone.
+
+## E7 - Holdout (once)
+
+- Date: 2026-10-18
+- Model: Claude Opus 5.5 (ran it, wrote the judgment)
+
+### Files created or modified
+- `repo/api/research_out/elder/holdout_84a6bd1b.json/.md` - train vs holdout report.
+- `repo/api/research_out/elder/holdout_log.jsonl` - one record, `forced` false, params hash `84a6bd1b...`.
+- `repo/api/research_out/elder/holdout.lock` - holdout lock; a second run needs `--force --reason`.
+- `trials.jsonl` unchanged.
+
+### Contracts frozen
+- None. Research verdict below.
+
+### Results
+
+Holdout window 2026-07-01 .. 2026-10-18 11:00 UTC, `frozen.json` = trial 17.
+
+| Window | ROI (90%) | Max DD | Closed | Trades/wk | P(T1) | E[R] | PF | random_tide mean ROI |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| Train Jan-Jun | +71.0% [+2.9, +301.8] | 15.2% | 120 | 4.8 | 0.42 | +0.549 | 2.09 | +17.2% (0% of seeds reach strategy) |
+| Holdout Jul-Oct | -31.5% [-40.4, -21.1] | 31.9% | 66 | 4.5 | 0.14 | -0.601 | 0.17 | -17.1% (100% of seeds reach strategy) |
+
+- Holdout fails on every count: infeasible (DD 31.9% > 20%), ROI interval entirely below zero, no trade reached 5R (train had nine), P(T1) fell from 0.42 to 0.14, 62% of trades stopped before T1.
+- All 20 `random_tide` seeds beat it (best -5.4%, worst -29.3%). The tide itself was a loser in this window, and the tuned wave/ripple filter made it worse, not better.
+- Every coin but ADA lost; ETH, SOL and DOGE, the train winners, lost too.
+- Train's concentration warning held: the edge lived in a few large trend moves in Jan-Jun; Jul-Oct had none, and the long-runner exit (30% at 2R, trail 6 ATR) gave back the rest.
+
+### Verdict
+- Elder Triple Screen at 30m/4H/1D with the v2 rules shows no out-of-sample edge on these 10 coins. Do not trade it, paper or live, in this form.
+- The train result was selection on one trend-friendly window. The holdout is spent; any new variant needs a new untouched window.
+
+### Deviations from the plan
+- None.
+
+**Ambiguities**
+- 5 holdout trades censored at the end of the window, all shorts in profit (mark +0.5R to +3.3R); counting them at mark would not change the sign or the verdict.

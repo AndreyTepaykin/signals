@@ -19,7 +19,7 @@ Test one new hypothesis offline: Elder's Triple Screen as a single **position** 
 | V2a Timeframes 30m / 4H / 1D in resample, signals, simulator | done (Bugbot clean) | see git log |
 | V2b Runner: pyramiding up to 5 per coin, compounding 1% risk, ROI objective | done (smoke train, defaults: ROI -48%, max DD 75%, infeasible; random tide -31%) | see git log |
 | E6 LLM tuning on Jan-Jun (budget 20 trials), freeze `frozen.json` | done (all 20 trials; frozen trial 17: ROI +71.0%, lower bound +2.9%, DD 15.2%, 120 trades, E[R] +0.55; beats every random-tide seed) | see git log |
-| E7 Holdout Jul-Oct, once; comparison report | pending | - |
+| E7 Holdout Jul-Oct, once; comparison report | done (failed: ROI -31.5%, DD 31.9%, E[R] -0.60; worse than every random-tide seed; no out-of-sample edge) | see git log |
 
 ## Rule change v2 (owner, 2026-10-18)
 
@@ -89,7 +89,7 @@ Subagents do not see the chat. Each brief names the milestone, points to this fi
 
 ## Next step
 
-E6 is done (see `BUILD-LOG.md`, entries E6 and E6b): the owner lifted the early stop, all 20 trials ran, and `frozen.json` is trial 17 (positive ROI lower bound, DD 15.2%, beats every random-tide seed; edge concentrated in a few >5R trades and in ETH/SOL/DOGE). E7 waits for the owner: run the holdout once with `frozen.json`, or stop here. Points 0-2 below are history.
+The research is finished (see `BUILD-LOG.md`, entries E6, E6b and E7). Trial 17 looked good on Jan-Jun (ROI +71%, DD 15.2%) and failed the one holdout run on Jul-Oct (ROI -31.5%, DD 31.9%, worse than random entries with the tide). Verdict: no out-of-sample edge; do not trade this strategy. The holdout is spent (`holdout.lock`); a new variant needs a new untouched window. Points 0-3 below are history.
 
 0. V2a and V2b are done. Under v2 the defaults lose 48% with a 75% drawdown at about 20 trades a week (E[R] -0.07). The tuner's first job is to get the drawdown under 20%: fewer, better trades through the wave threshold, the stop floor and the tide mode. Point 2 below (1-3 trades/week) no longer applies.
 1. E6: tuning. Trial 1 is `params_default.json` (from `repo/api`: `python -m app.research.elder.run --period train --params app/research/elder/params_default.json`). Then the tuner subagent (Fable 5.1 thinking high) proposes one `params.json` per turn from the train reports, `params_space.json` and `trials.jsonl` only. The orchestrator runs each one, checks the protocol, and stops at 20 trials or after three in a row without a better objective. It then freezes the best trial by objective with `--freeze --trial N`.
