@@ -19,14 +19,14 @@ from app.research.elder.report import (
     subwindow_counts,
     summarize,
 )
-from app.research.elder.resample import STEP_15M, STEP_1H, STEP_4H, OHLCV
+from app.research.elder.resample import STEP_4H, STEP_15M, STEP_30M, OHLCV
 from app.research.elder.simulate import Trade
 
 UTC = timezone.utc
 WEEK = timedelta(days=7)
 SERIES_START = datetime(2025, 1, 6, tzinfo=UTC)  # Monday
 WEEKS = 48
-WARM_WEEKS = 34  # weekly Impulse is cold before about week 34, and a cold Impulse blocks the tide
+WARM_WEEKS = 34  # the walk starts after this many weeks of history; the daily tide Impulse is warm after about 5 weeks
 
 PARAMS = ElderParams(
     tide_mode='ema',
@@ -86,7 +86,7 @@ def _counts(**overrides):
         'dropped_stop_wrong_side': 0,
         'dropped_stop_too_close_atr': 0,
         'dropped_costs_over_cap': 0,
-        'dropped_no_6h_context': 0,
+        'dropped_no_wave_context': 0,
         'skipped_position_open': 0,
     }
     counts.update(overrides)
@@ -134,7 +134,6 @@ def _coin(bars_15m, funding=()):
     return CoinData(
         coin='SYN',
         bars_15m=list(bars_15m),
-        bars_1h=_fold(bars_15m, 4, STEP_1H),
         bars_4h=_fold(bars_15m, 16, STEP_4H),
         funding=list(funding),
     )
@@ -196,7 +195,7 @@ def test_one_position_rule_counts_skips(walk, monkeypatch):
 def test_entries_outside_the_window_are_ignored(walk):
     period = walk['period']
     assert period.trades
-    mid = period.trades[0].fill_time + STEP_15M
+    mid = period.trades[0].fill_time + STEP_30M
     later = run_period([walk['data']], PARAMS, mid, walk['end'])
     assert all(mid <= trade.fill_time < walk['end'] for trade in later.trades)
     assert all(mid <= item.fill_time < walk['end'] for item in later.dropped)
@@ -421,7 +420,7 @@ def test_random_tide_baseline_is_deterministic_and_respects_one_position(walk):
 
 
 def test_render_markdown_covers_the_report_shape():
-    data = [CoinData('SYN', [], [], [], [])]
+    data = [CoinData('SYN', [], [], [])]
     report = build_report(
         data, PARAMS, datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 7, 1, tzinfo=UTC),
         subwindows=(('jan_apr', datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 5, 1, tzinfo=UTC)),),

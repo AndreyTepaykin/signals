@@ -1,4 +1,4 @@
-"""Elder Triple Screen simulator: one trade on 15m bars, with parts, stops, costs, funding.
+"""Elder Triple Screen simulator: one trade on ripple (30m) bars, with parts, stops, costs, funding.
 
 Pure functions, floats, stdlib only. ``d`` is ``entry.direction`` (+1 long, -1 short); every
 rule below is written for a long and mirrored for a short.
@@ -15,12 +15,12 @@ Stop state
 ``stop`` starts at ``entry.stop`` with kind ``'initial'`` and only ever tightens. The T1
 event closes ``share_1`` at T1; from the NEXT bar the stop becomes
 ``max(stop, entry)`` if ``be_after_t1`` (kind ``'breakeven'`` when that changed it) and
-trailing is on. Trailing runs only after the T1 event, at each 6H close that becomes visible
-(the first 15m bar with ``open_time >= close``, same lookup as the signals): candidate =
-(highest 15m high from the fill bar through the bar BEFORE the current one) -
-``trail_atr`` x ATR of the 6H bar that just closed; ``None`` ATR means no update; the new
-stop applies from that bar's open. A 6H close that became visible at or before the T1 bar is
-not an update (trailing was off); the first update is at the next 6H close.
+trailing is on. Trailing runs only after the T1 event, at each wave (4H) close that becomes visible
+(the first ripple bar with ``open_time >= close``, same lookup as the signals): candidate =
+(highest ripple-bar high from the fill bar through the bar BEFORE the current one) -
+``trail_atr`` x ATR(14) of the wave bar that just closed; ``None`` ATR means no update; the new
+stop applies from that bar's open. A wave close that became visible at or before the T1 bar is
+not an update (trailing was off); the first update is at the next wave close.
 
 Per-bar order
 -------------
@@ -28,7 +28,7 @@ Per-bar order
    stop, ``ambiguous=True``. Otherwise nothing happens, not even a T1 or T2 credit; its
    high counts for the trailing max-high only from the next bar on.
 2. Later bars, at the open: (a) pending breakeven / trail update; (b) tide exit: tide
-   direction ``-d`` or weekly impulse ``-d`` (0 or ``None`` do not exit) exits everything
+   direction ``-d`` or tide impulse ``-d`` (0 or ``None`` do not exit) exits everything
    at the open; (c) gap: ``open <= stop`` exits everything at the open, ``gapped=True``.
 3. Intrabar: ``low <= stop`` exits everything at the stop; ``ambiguous`` when this bar also
    touched a still-open target. Same-bar stop and target is the stop (labeler convention).
@@ -54,7 +54,7 @@ Choices beyond the brief (conservative or consistency):
 * Funding counts closed parts only; the open share of a censored trade contributes nothing
   to ``total_r`` (neither price, cost nor funding).
 * Data that simply ends (no next bar) is ``'end_of_period'``; ``'hole'`` needs a next bar
-  that exists but is not exactly 15m later.
+  that exists but is not exactly ``RIPPLE_STEP`` later.
 """
 
 from __future__ import annotations
@@ -66,8 +66,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from app.research.elder.params import COST_ROUND_TRIP, T2_R, ElderParams
-from app.research.elder.resample import STEP_15M
-from app.research.elder.signals import Entry, SignalContext, tide_at
+from app.research.elder.signals import RIPPLE_STEP, Entry, SignalContext, tide_at
 
 REASONS = ('stop', 't1', 't2', 'tide_exit')
 STOP_KINDS = ('initial', 'breakeven', 'trail')
@@ -149,10 +148,10 @@ def _walk(entry: Entry, ctx: SignalContext, params: ElderParams, end_time: datet
         raise ValueError('entry price and r must be finite, r > 0')
     if d * (e - entry.stop) <= 0.0 or not math.isclose(abs(e - entry.stop), r, rel_tol=1e-9, abs_tol=0.0):
         raise ValueError('entry.stop must lie on the loss side at distance entry.r')
-    bars = ctx.bars_15m
+    bars = ctx.bars_ripple
     k0 = entry.fill_index
     if not 0 <= k0 < len(bars) or bars[k0].open_time != entry.fill_time:
-        raise ValueError('entry.fill_index does not point at the fill bar of ctx.bars_15m')
+        raise ValueError('entry.fill_index does not point at the fill bar of ctx.bars_ripple')
 
     walk = _Walk(last_index=k0)
     share_1 = params.t1_share
@@ -193,7 +192,7 @@ def _walk(entry: Entry, ctx: SignalContext, params: ElderParams, end_time: datet
     activation_pending = False
     trail_active = False
     run_ext: float | None = None  # highest high (long) / lowest low (short), bars before current
-    prev_slot = _last_closed(ctx.close_times_6h, bars[k0].open_time)
+    prev_slot = _last_closed(ctx.close_times_wave, bars[k0].open_time)
 
     def book(share: float, price: float, when: datetime, reason: str, *, kind: str | None = None,
              gapped: bool = False, ambiguous: bool = False) -> None:
@@ -213,7 +212,7 @@ def _walk(entry: Entry, ctx: SignalContext, params: ElderParams, end_time: datet
             else:
                 walk.mae = max(walk.mae, adverse(worst(bar)))
         else:
-            slot = _last_closed(ctx.close_times_6h, bar.open_time)
+            slot = _last_closed(ctx.close_times_wave, bar.open_time)
             # (a) pending breakeven and trail update, both known at this open
             if activation_pending:
                 activation_pending = False
@@ -224,7 +223,7 @@ def _walk(entry: Entry, ctx: SignalContext, params: ElderParams, end_time: datet
                         stop, stop_kind = new_stop, 'breakeven'
                         walk.stop_history.append((k, stop, stop_kind))
             if trail_active and slot is not None and slot != prev_slot and run_ext is not None:
-                atr = ctx.atr_6h[slot]
+                atr = ctx.atr_wave[slot]
                 if atr is not None:
                     candidate = run_ext - d * params.trail_atr * atr
                     new_stop = tighter(stop, candidate)
@@ -289,9 +288,9 @@ def _walk(entry: Entry, ctx: SignalContext, params: ElderParams, end_time: datet
         else:
             run_ext = max(run_ext, bar.high) if d > 0 else min(run_ext, bar.low)
 
-        expected_open = bar.open_time + STEP_15M
+        expected_open = bar.open_time + RIPPLE_STEP
         nxt = k + 1
-        if expected_open + STEP_15M > end_time or nxt >= len(bars):
+        if expected_open + RIPPLE_STEP > end_time or nxt >= len(bars):
             walk.censor_reason = 'end_of_period'
         elif bars[nxt].open_time != expected_open:
             walk.censor_reason = 'hole'
@@ -311,7 +310,7 @@ def simulate_trade(
     funding: Sequence[FundingPrint],
     end_time: datetime,
 ) -> Trade:
-    """Walk one entry over ``ctx.bars_15m`` bars with ``close_time <= end_time`` and price it."""
+    """Walk one entry over ``ctx.bars_ripple`` bars with ``close_time <= end_time`` and price it."""
     walk = _walk(entry, ctx, params, end_time)
     d = entry.direction
     e = entry.fill_price

@@ -16,8 +16,21 @@ Test one new hypothesis offline: Elder's Triple Screen as a single **position** 
 | E3 Signals (tide 1W, wave 6H, ripple 15m, stop, min-distance filter) | done (109 tests, Bugbot clean) | see git log |
 | E4 Simulator (T1 partial, breakeven, trailing, 10R cap, tide exit, costs, funding, censoring) | done (98 tests, Bugbot clean) | see git log |
 | E5 Runner (read-only load, report, baselines, `trials.jsonl`, holdout lock) | done (smoke train: E[R] +0.33 at 6.3 trades/week, infeasible; random tide +0.28) | see git log |
+| V2a Timeframes 30m / 4H / 1D in resample, signals, simulator | done (Bugbot clean) | see git log |
+| V2b Runner: pyramiding up to 5 per coin, compounding 1% risk, ROI objective | pending | - |
 | E6 LLM tuning on Jan-Jun (budget 20 trials), freeze `frozen.json` | pending | - |
 | E7 Holdout Jul-Oct, once; comparison report | pending | - |
+
+## Rule change v2 (owner, 2026-10-18)
+
+These replace the matching 2026-10-17 decisions below; everything not named here stays. The change was made after the E5 smoke train run and before any tuning trial or holdout run, so the holdout is still unseen.
+
+- **Timeframes: ripple 30m, wave 4H, tide 1D.** 30m is built from stored perp 15m on :00 / :30 (2 bars); 4H is the stored perp 4h; 1D is built from 4h at 00:00 UTC (6 bars). An incomplete bar is not built. 1h and 6H and 1W are no longer used.
+- **Resolution on 30m bars**, the ripple timeframe, so signals and the simulator share one bar series. The stop, the stop floor and the trailing stop use 4H bars and 4H ATR(14); a tide exit fires on a 1D reversal.
+- **Up to 5 open trades per coin**, all in one direction, whose risk zones do not overlap: a new long is taken only if its initial stop is at or above the highest entry of the open longs on that coin (shorts mirrored). A fill against the open direction, a sixth trade or an overlapping one is skipped and counted.
+- **Sizing: 1% of current equity at risk per trade, compounding.** Equity starts at 1.0 and moves only on realized part exits; a trade's risk is 1% of the equity at its fill. A part's P&L is risk x share x (price R - costs + funding). Open shares of censored trades are not in equity.
+- **Success is ROI.** ROI = final realized equity - 1 over the period. Objective: the lower bound of the 90% interval of ROI over Jan-Jun (bootstrap by week), feasible only when the realized max drawdown is no worse than 20%. The 1-3 trades/week limit is dropped. E[R], P(T1) and P(10R) are still reported.
+- **Parameter units follow the new bars:** `ripple_expiry_bars` counts 30m bars, `stop_lookback_bars` counts 4H bars, `trail_atr` and `min_stop_atr` use 4H ATR.
 
 ## Decisions locked (owner, 2026-10-17)
 
@@ -76,6 +89,7 @@ Subagents do not see the chat. Each brief names the milestone, points to this fi
 
 ## Next step
 
+0. V2a then V2b (rule change v2 above). V2a: Sonnet 5.5 high, then Bugbot. V2b: Grok 4.7 High Fast, then Bugbot. Then a new smoke train run before E6. Points 1-2 below then apply with the v2 objective.
 1. E6: tuning. Trial 1 is `params_default.json` (from `repo/api`: `python -m app.research.elder.run --period train --params app/research/elder/params_default.json`). Then the tuner subagent (Fable 5.1 thinking high) proposes one `params.json` per turn from the train reports, `params_space.json` and `trials.jsonl` only. The orchestrator runs each one, checks the protocol, and stops at 20 trials or after three in a row without a better objective. It then freezes the best trial by objective with `--freeze --trial N`.
 2. The defaults trade 6.3 times a week; the first job is getting to 1-3 a week through the wave threshold and the stop floor without losing the E[R] lower bound.
 3. E7 holdout once, per the plan. Keep the live worker running meanwhile; this research does not need it stopped.

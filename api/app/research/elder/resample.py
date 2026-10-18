@@ -1,4 +1,4 @@
-"""Resample 1h bars to 6H and 4h bars to 1W.
+"""Resample bars: 15m to 30m, 4h to 1D, and the older 1h to 6H and 4h to 1W.
 
 Times are timezone-aware UTC. ``close_time`` is the exclusive end of the bar,
 ``open_time + length``, not Binance's close (which is one millisecond earlier).
@@ -6,17 +6,20 @@ The loader converts; nothing here subtracts that millisecond.
 
 Buckets
 -------
-6H bars open at 00:00, 06:00, 12:00 and 18:00 UTC. Weekly bars open on Monday
-00:00 UTC. A bucket is emitted only when every source bar is present, with open
-times exactly ``bucket + i * source_step`` (6 hourly bars, or 42 four-hour
-bars). Anything else — a leading partial bucket, a trailing partial bucket, or
-a hole inside — drops that bucket and leaves its neighbours alone. A dropped
-bucket is a missing bar. :func:`align` turns the gap into a ``None`` slot so an
-indicator sees a hole and restarts, rather than bridging across it.
+30m bars open at :00 and :30 (2 fifteen-minute bars). Daily bars open at 00:00
+UTC (6 four-hour bars). 6H bars (00/06/12/18 UTC, 6 hourly bars) and weekly
+bars (Monday 00:00 UTC, 42 four-hour bars) are kept for completeness. A bucket
+is emitted only when every source bar is present, with open times exactly
+``bucket + i * source_step``. Anything else — a leading partial bucket, a
+trailing partial bucket, or a hole inside — drops that bucket and leaves its
+neighbours alone. A dropped bucket is a missing bar. :func:`align` turns the
+gap into a ``None`` slot so an indicator sees a hole and restarts, rather than
+bridging across it.
 
 Input must be strictly sorted by ``open_time`` and each source open must sit on
-the source step (exact hours for 1h; 00/04/08/12/16/20 UTC for 4h). Unsorted,
-duplicate, or off-grid input raises ``ValueError``.
+the source step (exact quarter hours for 15m, exact hours for 1h,
+00/04/08/12/16/20 UTC for 4h). Unsorted, duplicate, or off-grid input raises
+``ValueError``.
 """
 
 from __future__ import annotations
@@ -31,12 +34,16 @@ _UTC = timezone.utc
 _EPOCH = datetime(1970, 1, 1, tzinfo=_UTC)
 
 STEP_15M = timedelta(minutes=15)
+STEP_30M = timedelta(minutes=30)
 STEP_1H = timedelta(hours=1)
 STEP_4H = timedelta(hours=4)
 STEP_6H = timedelta(hours=6)
+STEP_1D = timedelta(days=1)
 STEP_1W = timedelta(days=7)
 
+_BARS_PER_30M = 2
 _BARS_PER_6H = 6
+_BARS_PER_DAY = 6
 _BARS_PER_WEEK = 42
 
 
@@ -61,6 +68,27 @@ def _as_utc(instant: datetime) -> datetime:
 
 def _on_grid(instant: datetime, step: timedelta) -> bool:
     return (instant - _EPOCH) % step == timedelta(0)
+
+
+def bucket_start_30m(t: datetime) -> datetime:
+    """Floor ``t`` to :00 or :30 UTC.
+
+    Converted to UTC before flooring. An exact boundary maps to itself: 10:30
+    starts a bucket, 10:15 still belongs to 10:00.
+    """
+    u = _as_utc(t)
+    minute = (u.minute // 30) * 30
+    return u.replace(minute=minute, second=0, microsecond=0)
+
+
+def bucket_start_1d(t: datetime) -> datetime:
+    """Floor ``t`` to 00:00 UTC.
+
+    Converted to UTC before flooring. Midnight maps to itself; 20:00, the last
+    4h bar of a day, still belongs to that day.
+    """
+    u = _as_utc(t)
+    return u.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 def bucket_start_6h(t: datetime) -> datetime:
@@ -137,6 +165,26 @@ def _resample(
     return out
 
 
+def to_30m(bars_15m: Sequence[OHLCV]) -> list[OHLCV]:
+    """Build 30m bars from 15m bars on the :00 / :30 UTC grid.
+
+    Emitted only when both the ``:00`` / ``:30`` bar and the one 15 minutes later
+    are present. Open is the first open, high the max, low the min, close the last
+    close, volume the sum. ``close_time`` is ``bucket + 30m``.
+    """
+    return _resample(bars_15m, STEP_15M, _BARS_PER_30M, STEP_30M, bucket_start_30m)
+
+
+def to_1d(bars_4h: Sequence[OHLCV]) -> list[OHLCV]:
+    """Build daily bars from 4h bars, opening 00:00 UTC.
+
+    Emitted only when all 6 bars ``midnight + i * 4h`` (``i = 0 .. 5``) are
+    present. The last of those opens 20:00 UTC and belongs to that day.
+    ``close_time`` is the next 00:00 UTC.
+    """
+    return _resample(bars_4h, STEP_4H, _BARS_PER_DAY, STEP_1D, bucket_start_1d)
+
+
 def to_6h(bars_1h: Sequence[OHLCV]) -> list[OHLCV]:
     """Build 6H bars from 1h bars on the 00/06/12/18 UTC grid.
 
@@ -162,7 +210,8 @@ def align(bars: Sequence[OHLCV], step: timedelta) -> list[OHLCV | None]:
     """One slot per ``step`` from the first bar's open to the last.
 
     A slot whose open time has no bar is ``None``. That is how a bucket
-    :func:`to_6h` or :func:`to_1w` skipped becomes a hole for the indicators.
+    :func:`to_30m`, :func:`to_1d`, :func:`to_6h` or :func:`to_1w` skipped becomes
+    a hole for the indicators.
     ``bars`` must be strictly sorted by ``open_time`` and every open must fall
     on the grid defined by the first bar and ``step``.
     """
@@ -199,7 +248,7 @@ def last_closed_index(bars: Sequence[OHLCV], as_of: datetime) -> int | None:
     ``bars`` must be strictly sorted by ``close_time``. Equality counts as
     closed: a bar whose close time is exactly ``as_of`` is visible, and one
     microsecond earlier it is not. The search is ``bisect``. Callers choose
-    ``as_of``; a decision on 15m bar ``t`` passes ``t``'s open time and therefore
+    ``as_of``; a decision on ripple bar ``t`` passes ``t``'s open time and therefore
     sees only higher-timeframe bars that have already closed.
     """
     as_of_utc = _as_utc(as_of)

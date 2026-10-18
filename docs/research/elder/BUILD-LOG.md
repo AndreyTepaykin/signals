@@ -246,3 +246,35 @@ None.
 - No cancels on real data: with `ripple_expiry_bars` 8 (2 hours), the order expires before the next 6H close can switch the wave off; only a weekly flip could cancel it. Cancels become possible once expiry exceeds 24 bars.
 - The ripple filters almost nothing (749 of 757 armed orders fill). Selection falls on the wave threshold and the stop-distance floor, as the E0 open items predicted.
 - The May-June rate (11.9 a week) is 3.5 times Jan-Apr's, so the trade count depends heavily on the regime.
+
+## V2a - Timeframes 30m / 4H / 1D
+
+- Date: 2026-10-18
+- Model: Claude Sonnet 5.5 high (implementer), Bugbot (review: no bugs), Claude Opus 5.5 (diff review)
+- Why: owner rule change v2 (see `HANDOFF.md`), made after the E5 smoke train run and before any tuning trial or holdout run.
+
+### Files created or modified
+- `repo/api/app/research/elder/resample.py` - `to_30m`, `to_1d`.
+- `repo/api/app/research/elder/signals.py`, `simulate.py` - timeframe-neutral names, ripple 30m, wave 4H, tide 1D.
+- `repo/api/app/research/elder/report.py`, `load.py` - build 30m from 15m and 1D from 4h, use 4h as the wave; 1h no longer loaded.
+- `repo/api/app/research/elder/params_space.json`, `params_default.json`, `params.py` (docstring).
+- `repo/api/tests/test_elder_*.py` - updated; new `to_30m` / `to_1d` boundary tests; truncation and in-progress mutation tests on 30m / 4H / 1D.
+
+### Contracts frozen
+- These supersede the matching E2-E5 names:
+  - `resample`: `STEP_30M`, `STEP_1D`, `bucket_start_30m`, `bucket_start_1d`, `to_30m(bars_15m)` (2 bars on :00 / :30), `to_1d(bars_4h)` (6 bars from 00:00 UTC). `to_6h` and `to_1w` remain but are unused.
+  - `signals`: `RIPPLE_STEP = STEP_30M`, `WAVE_STEP = STEP_4H`, `TIDE_STEP = STEP_1D`; `build_context(bars_ripple, bars_wave, bars_tide, params)`. `SignalContext` fields: `bars_ripple`, `bars_wave`, `close_times_wave`, `atr_wave`, `impulse_wave`, `wave_long`, `wave_short`, `bars_tide`, `close_times_tide`, `tide_dir`, `impulse_tide`, `params`.
+  - `Entry.atr_6h` is now `atr_wave`; `fill_index` indexes `bars_ripple`.
+  - Drop reason `no_6h_context` is now `no_wave_context`, with count key `dropped_no_wave_context`.
+  - `CoinData` has no `bars_1h`.
+- Simulator resolves on the 30m ripple bars. Trailing updates at each 4H close with 4H ATR; the extreme is still taken over ripple bars since the fill.
+- `params_space.json`: `ripple_expiry_bars` int [1, 48] (30m bars), `stop_lookback_bars` int [1, 12] (4H bars). `params_default.json`: `ripple_expiry_bars` 4, `stop_lookback_bars` 3.
+
+### Results
+- Synthetic signals fixture: 497 arms, 413 fills, 84 expired, 0 cancelled, 406 entries. Full suite: 1989 passed, 1 failed (the owner's calendar CSV).
+
+### Deferred to a later milestone
+- Pyramiding (up to 5 per coin), compounding 1% risk, ROI objective and drawdown limit -> V2b.
+
+### Deviations from the plan
+- Timeframes changed by the owner (rule change v2).

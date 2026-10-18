@@ -13,7 +13,7 @@ Two groups live here:
 
 * ``force2``: Force Index(2) divided by (ATR x SMA20 of volume), a pure number.
 * ``stoch``: points of slow %K, in ``[0, 100]``.
-* ``elder_ray``: multiples of the 6H ATR.
+* ``elder_ray``: multiples of the wave-timeframe (4H) ATR.
 """
 
 from __future__ import annotations

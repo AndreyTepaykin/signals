@@ -1,4 +1,4 @@
-"""6H and weekly resampling: UTC boundaries, complete buckets only, no lookahead index."""
+"""30m and daily resampling (the live timeframes) and the kept 6H / weekly ones: UTC boundaries, complete buckets only, no lookahead index."""
 
 from datetime import datetime, timedelta, timezone
 
@@ -6,18 +6,24 @@ import pytest
 
 from app.research.elder.indicators import ema, ohlcv_fields
 from app.research.elder.resample import (
-    STEP_15M,
+    STEP_1D,
     STEP_1H,
     STEP_1W,
     STEP_4H,
     STEP_6H,
+    STEP_15M,
+    STEP_30M,
     OHLCV,
     align,
+    bucket_start_1d,
     bucket_start_1w,
     bucket_start_6h,
+    bucket_start_30m,
     last_closed_index,
+    to_1d,
     to_1w,
     to_6h,
+    to_30m,
 )
 
 UTC = timezone.utc
@@ -77,7 +83,9 @@ def test_step_constants():
     assert STEP_15M == timedelta(minutes=15)
     assert STEP_1H == timedelta(hours=1)
     assert STEP_4H == timedelta(hours=4)
+    assert STEP_30M == timedelta(minutes=30)
     assert STEP_6H == timedelta(hours=6)
+    assert STEP_1D == timedelta(days=1)
     assert STEP_1W == timedelta(days=7)
 
 
@@ -321,3 +329,211 @@ def test_last_closed_index_rejects_unsorted_bars_and_a_naive_clock():
         last_closed_index([later, earlier], start + 2 * STEP_6H)
     with pytest.raises(ValueError):
         last_closed_index([earlier, later], datetime(2026, 1, 5, 12))
+
+
+# --- 30m aggregation -------------------------------------------------------
+def quarter_bar(hour, minute, open_, high, low, close, volume=1.0, day=5):
+    opened = utc(2026, 1, day, hour, minute)
+    return OHLCV(opened, opened + STEP_15M, float(open_), float(high), float(low), float(close), float(volume))
+
+
+def quarter_hours(count=8, start_hour=0):
+    """``count`` exact 15m bars from ``start_hour``:00. Bar i: open i, high i+10, low i-1, close i+0.5, volume i+1."""
+    out = []
+    for i in range(count):
+        opened = utc(2026, 1, 5, start_hour) + i * STEP_15M
+        out.append(
+            OHLCV(opened, opened + STEP_15M, float(i), float(i + 10), float(i - 1), i + 0.5, float(i + 1))
+        )
+    return out
+
+
+def expected_30m(first, opened):
+    """Hand aggregation of quarter bars ``first`` and ``first + 1`` from :func:`quarter_hours`."""
+    a, b = first, first + 1
+    return OHLCV(
+        opened,
+        opened + STEP_30M,
+        float(a),
+        float(b + 10),
+        float(a - 1),
+        b + 0.5,
+        float((a + 1) + (b + 1)),
+    )
+
+
+@pytest.mark.parametrize(
+    'minute,bucket_minute',
+    [(0, 0), (14, 0), (15, 0), (29, 0), (30, 30), (44, 30), (45, 30), (59, 30)],
+)
+def test_30m_floor_is_00_and_30(minute, bucket_minute):
+    assert bucket_start_30m(utc(2026, 1, 5, 10, minute)) == utc(2026, 1, 5, 10, bucket_minute)
+    assert bucket_start_30m(utc(2026, 1, 5, 10, minute, 59, 999)) == utc(2026, 1, 5, 10, bucket_minute)
+
+
+def test_30m_floor_converts_to_utc_first_and_rejects_naive():
+    plus3 = timezone(timedelta(hours=3))
+    assert bucket_start_30m(datetime(2026, 1, 5, 13, 45, tzinfo=plus3)) == utc(2026, 1, 5, 10, 30)
+    with pytest.raises(ValueError):
+        bucket_start_30m(datetime(2026, 1, 5, 10, 15))
+
+
+def test_30m_quarter_past_belongs_to_the_hour_and_half_past_starts_the_next():
+    built = to_30m(quarter_hours(4))
+    assert [bar.open_time for bar in built] == [utc(2026, 1, 5, 0, 0), utc(2026, 1, 5, 0, 30)]
+    assert built == [expected_30m(0, utc(2026, 1, 5, 0, 0)), expected_30m(2, utc(2026, 1, 5, 0, 30))]
+    # The :15 bar closes the :00 bucket; the :30 bar opens the next one.
+    quarters = quarter_hours(4)
+    assert built[0].close == quarters[1].close
+    assert built[0].close_time == utc(2026, 1, 5, 0, 30)
+    assert built[1].open == quarters[2].open
+    assert built[1].close_time == built[1].open_time + STEP_30M
+
+
+def test_30m_ignores_binance_style_close_and_writes_the_exclusive_end():
+    bars = []
+    for i in range(2):
+        opened = utc(2026, 1, 5, 0) + i * STEP_15M
+        bars.append(OHLCV(opened, opened + STEP_15M - timedelta(milliseconds=1), 1, 2, 0, i, 1))
+    built = to_30m(bars)
+    assert len(built) == 1
+    assert built[0].close_time == utc(2026, 1, 5, 0, 30)
+    assert built[0].close == 1
+
+
+def test_30m_leading_partial_is_skipped_and_not_merged():
+    # The :15 bar alone does not complete the :00 bucket and must not join :30.
+    bars = quarter_hours(6)[1:]
+    assert to_30m(bars) == [expected_30m(2, utc(2026, 1, 5, 0, 30)), expected_30m(4, utc(2026, 1, 5, 1, 0))]
+
+
+def test_30m_trailing_partial_is_skipped():
+    bars = quarter_hours(5)  # :00 :15 :30 :45 and a lone next-hour :00
+    assert to_30m(bars) == [expected_30m(0, utc(2026, 1, 5, 0, 0)), expected_30m(2, utc(2026, 1, 5, 0, 30))]
+
+
+def test_30m_hole_skips_only_its_bucket():
+    bars = [bar for i, bar in enumerate(quarter_hours(8)) if i != 3]  # the 00:45 bar is missing
+    built = to_30m(bars)
+    assert [bar.open_time for bar in built] == [utc(2026, 1, 5, 0, 0), utc(2026, 1, 5, 1, 0), utc(2026, 1, 5, 1, 30)]
+    assert built[0] == expected_30m(0, utc(2026, 1, 5, 0, 0))
+    assert built[1] == expected_30m(4, utc(2026, 1, 5, 1, 0))
+
+
+def test_30m_two_bars_that_straddle_a_boundary_build_nothing():
+    assert to_30m(quarter_hours(3)[1:]) == []  # :15 and :30 are in different buckets
+
+
+def test_30m_empty_and_single_build_nothing():
+    assert to_30m([]) == []
+    assert to_30m(quarter_hours(1)) == []
+
+
+def test_30m_rejects_unsorted_duplicate_off_grid_and_naive():
+    a, b = quarter_hours(2)
+    with pytest.raises(ValueError):
+        to_30m([b, a])
+    with pytest.raises(ValueError):
+        to_30m([a, a])
+    opened = utc(2026, 1, 5, 0, 5)
+    with pytest.raises(ValueError):
+        to_30m([OHLCV(opened, opened + STEP_15M, 1, 1, 1, 1, 1)])
+    naive = datetime(2026, 1, 5, 0)
+    with pytest.raises(ValueError):
+        to_30m([OHLCV(naive, naive + STEP_15M, 1, 1, 1, 1, 1)])
+
+
+def test_align_30m_makes_a_none_slot_for_a_skipped_bucket():
+    bars = [bar for i, bar in enumerate(quarter_hours(8)) if i != 3]
+    aligned = align(to_30m(bars), STEP_30M)
+    assert [slot if slot is None else slot.open_time for slot in aligned] == [
+        utc(2026, 1, 5, 0, 0),
+        None,
+        utc(2026, 1, 5, 1, 0),
+        utc(2026, 1, 5, 1, 30),
+    ]
+
+
+# --- daily aggregation -----------------------------------------------------
+def day_of_4h(day_start, skip=()):
+    return [four_hour(day_start, index) for index in range(6) if index not in skip]
+
+
+def test_1d_step_and_floor():
+    assert bucket_start_1d(utc(2026, 1, 5, 0)) == utc(2026, 1, 5)
+    assert bucket_start_1d(utc(2026, 1, 5, 20)) == utc(2026, 1, 5)
+    assert bucket_start_1d(utc(2026, 1, 5, 23, 59, 59, 999999)) == utc(2026, 1, 5)
+    assert bucket_start_1d(utc(2026, 1, 6, 0)) == utc(2026, 1, 6)
+    plus3 = timezone(timedelta(hours=3))
+    assert bucket_start_1d(datetime(2026, 1, 6, 2, tzinfo=plus3)) == utc(2026, 1, 5)
+    assert bucket_start_1d(datetime(2026, 1, 6, 3, tzinfo=plus3)) == utc(2026, 1, 6)
+    with pytest.raises(ValueError):
+        bucket_start_1d(datetime(2026, 1, 5, 5))
+
+
+def test_1d_bar_at_20_belongs_to_that_day_and_next_midnight_starts_a_new_one():
+    day = utc(2026, 1, 5)
+    next_day = utc(2026, 1, 6)
+    last = four_hour(day, 5)
+    assert last.open_time == utc(2026, 1, 5, 20)
+    built = to_1d(day_of_4h(day) + [four_hour(next_day, 0)])
+    assert len(built) == 1  # the lone 00:00 bar of the next day is a trailing partial
+    assert built[0] == OHLCV(day, next_day, 100.0, 205.0, 50.0, 155.0, 6.0)
+    assert built[0].close == last.close
+    assert built[0].open == four_hour(day, 0).open
+    both = to_1d(day_of_4h(day) + day_of_4h(next_day))
+    assert [bar.open_time for bar in both] == [day, next_day]
+    assert [bar.close_time for bar in both] == [next_day, utc(2026, 1, 7)]
+
+
+def test_1d_leading_partial_is_skipped_and_not_merged():
+    previous = utc(2026, 1, 4)
+    leading = [four_hour(previous, index) for index in range(3, 6)]
+    day = utc(2026, 1, 5)
+    assert to_1d(leading + day_of_4h(day)) == to_1d(day_of_4h(day))
+    assert len(to_1d(leading + day_of_4h(day))) == 1
+
+
+def test_1d_trailing_partial_is_skipped():
+    next_day = utc(2026, 1, 6)
+    trailing = [four_hour(next_day, index) for index in range(5)]
+    day = utc(2026, 1, 5)
+    assert to_1d(day_of_4h(day) + trailing) == to_1d(day_of_4h(day))
+
+
+def test_1d_hole_skips_only_its_day():
+    day, next_day = utc(2026, 1, 5), utc(2026, 1, 6)
+    built = to_1d(day_of_4h(day, skip={2}) + day_of_4h(next_day))
+    assert [bar.open_time for bar in built] == [next_day]
+    assert built == to_1d(day_of_4h(next_day))
+    third = utc(2026, 1, 7)
+    built = to_1d(day_of_4h(day) + day_of_4h(next_day, skip={5}) + day_of_4h(third))
+    assert [bar.open_time for bar in built] == [day, third]
+
+
+def test_1d_six_bars_that_do_not_start_at_midnight_build_nothing():
+    bars = [four_hour(utc(2026, 1, 5), index) for index in range(1, 6)] + [four_hour(utc(2026, 1, 6), 0)]
+    assert to_1d(bars) == []
+
+
+def test_1d_empty_and_off_grid():
+    assert to_1d([]) == []
+    opened = utc(2026, 1, 5, 2)
+    with pytest.raises(ValueError):
+        to_1d([OHLCV(opened, opened + STEP_4H, 1, 1, 1, 1, 1)])
+    first, second = four_hour(utc(2026, 1, 5), 1), four_hour(utc(2026, 1, 5), 0)
+    with pytest.raises(ValueError):
+        to_1d([first, second])
+    with pytest.raises(ValueError):
+        to_1d([four_hour(utc(2026, 1, 5), 0), four_hour(utc(2026, 1, 5), 0)])
+
+
+def test_align_1d_makes_a_none_slot_for_a_skipped_day_and_feeds_a_cold_ema():
+    aligned = align(to_1d(day_of_4h(utc(2026, 1, 5)) + day_of_4h(utc(2026, 1, 7))), STEP_1D)
+    assert [slot if slot is None else slot.open_time for slot in aligned] == [
+        utc(2026, 1, 5),
+        None,
+        utc(2026, 1, 7),
+    ]
+    _opens, _highs, _lows, closes, _volumes = ohlcv_fields(aligned)
+    assert ema(closes, 2) == [None, None, None]

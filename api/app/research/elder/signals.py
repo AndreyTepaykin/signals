@@ -1,15 +1,21 @@
-"""Elder Triple Screen signals: tide (1W), wave (6H), ripple (15m), stop.
+"""Elder Triple Screen signals: tide, wave, ripple, stop (timeframe-neutral).
+
+The three screens run on the series named by module constants: ripple
+``RIPPLE_STEP`` (30m, built from 15m), wave ``WAVE_STEP`` (4H, the stored 4h
+bars) and tide ``TIDE_STEP`` (1D, built from 4h). Names in this module say
+"ripple", "wave" and "tide" so a different set of steps needs no renames.
 
 Direction is an int, ``+1`` long and ``-1`` short.
 
 No-lookahead rule
 -----------------
-A decision on 15m bar ``t`` uses only 15m bars strictly before ``t`` (closed),
-plus the last 6H bar and the last 1W bar with ``close_time <= t.open_time``.
-The 6H bar and the week in progress are never read. All higher-timeframe
-lookups are ``bisect`` on close-time lists built once in :func:`build_context`.
-A slot that the resampler skipped (a ``None`` in the aligned list) is a hole,
-not a reason to fall back to an older bar: decisions on it are "not active".
+A decision on ripple bar ``t`` uses only ripple bars strictly before ``t``
+(closed), plus the last wave bar and the last tide bar with
+``close_time <= t.open_time``. The wave bar and the tide bar in progress are
+never read. All higher-timeframe lookups are ``bisect`` on close-time lists
+built once in :func:`build_context`. A slot that the resampler skipped (a
+``None`` in the aligned list) is a hole, not a reason to fall back to an older
+bar: decisions on it are "not active".
 
 Stale data: if ``as_of`` lies far past the last higher-timeframe bar, the last
 bar is still "the last closed one". The loader gives all timeframes the same end.
@@ -18,15 +24,15 @@ Tide
 ----
 ``tide_mode`` picks the sign of the slope of EMA13 (``ema``), of the MACD
 histogram 12/26/9 (``macd``), or both when they agree (``both``, else 0), all
-on the last closed weekly bar. Tide permits direction ``d`` if ``tide == d`` and
-the weekly Impulse is not ``-d``. The Impulse veto is redundant for the single
+on the last closed tide bar. Tide permits direction ``d`` if ``tide == d`` and
+the tide Impulse is not ``-d``. The Impulse veto is redundant for the single
 modes by construction (impulse ``-d`` needs both slopes of sign ``-d``) and only
 bites on a cold or missing Impulse (``None``: not permitted).
 
-Wave (last closed 6H bar, ``ATR`` = 6H ATR14 at that bar), long; short mirrored.
-``wave_threshold`` has different units for each oscillator:
+Wave (last closed wave bar, ``ATR`` = wave-timeframe ATR14 at that bar), long;
+short mirrored. ``wave_threshold`` has different units for each oscillator:
 
-* ``force2``: normalized = Force Index(2) / (ATR x SMA20 of 6H volume).
+* ``force2``: normalized = Force Index(2) / (ATR x SMA20 of wave volume).
   Long if ``normalized < -wave_threshold``, short if ``> +wave_threshold``.
 * ``stoch``: slow %K(5,3), in points. Long if ``< wave_threshold``, short if
   ``> 100 - wave_threshold``.
@@ -35,32 +41,35 @@ Wave (last closed 6H bar, ``ATR`` = 6H ATR14 at that bar), long; short mirrored.
   slope(bull_power) < 0.
 
 Any needed value ``None`` (cold, hole, zero denominator) means not active. With
-``wave_block_impulse`` the 6H Impulse is also needed and must not be ``-d``
+``wave_block_impulse`` the wave Impulse is also needed and must not be ``-d``
 (a ``None`` Impulse counts as not active).
 
-Ripple order lifecycle (15m)
-----------------------------
-On the first 15m bar ``t`` that sees a new closed 6H bar (``t.open_time`` >= its
-``close_time``), with no order pending, tide permitting ``d`` and the wave active
-for ``d``, a stop order is ARMED. A 6H close that arrives while an order is
-pending is spent. A 6H close is used at most once: the first bar that sees it.
+Ripple order lifecycle
+----------------------
+On the first ripple bar ``t`` that sees a new closed wave bar (``t.open_time``
+>= its ``close_time``), with no order pending, tide permitting ``d`` and the
+wave active for ``d``, a stop order is ARMED. A wave close that arrives while an
+order is pending is spent. A wave close is used at most once: the first bar that
+sees it.
 
 Per bar while pending, in this order: cancel if tide no longer permits ``d`` or
-the last closed 6H bar has the wave inactive; expire if the order has already
-been tried on ``ripple_expiry_bars`` bars (counted bars, a missing 15m bar does
-not count); arm again if the bar is the first to see a new 6H close; try to
-fill. The order may fill on bars ``t .. t + ripple_expiry_bars - 1``.
+the last closed wave bar has the wave inactive; expire if the order has already
+been tried on ``ripple_expiry_bars`` bars (counted ripple bars, a missing bar
+does not count); arm again if the bar is the first to see a new wave close; try
+to fill. The order may fill on bars ``t .. t + ripple_expiry_bars - 1``.
 
-Level: high (long) / low (short) of the previous 15m bar, only when that bar is
-exactly 15m earlier, else no fill on this bar. Fill when ``bar.high > level``
-(long) / ``bar.low < level`` (short), strict. Fill price is ``max(open, level)``
-(long) / ``min(open, level)`` (short), a gap through the level fills at the
-open. No tick size.
+Level: high (long) / low (short) of the previous ripple bar, only when that bar
+is exactly ``RIPPLE_STEP`` earlier, else no fill on this bar. Fill when
+``bar.high > level`` (long) / ``bar.low < level`` (short), strict. Fill price is
+``max(open, level)`` (long) / ``min(open, level)`` (short), a gap through the
+level fills at the open. No tick size.
+
+Stop: beyond the extreme of the last ``stop_lookback_bars`` wave bars plus
+``stop_atr_buffer`` x wave ATR(14).
 
 Positions are NOT tracked here. :func:`generate_entries` emits every fill; the
-E5 runner skips fills while a position is open for that coin.
+runner skips fills while a position is open for that coin.
 """
-
 from __future__ import annotations
 
 import bisect
@@ -94,12 +103,17 @@ from app.research.elder.params import (
     VOLUME_SMA,
     ElderParams,
 )
-from app.research.elder.resample import OHLCV, STEP_1W, STEP_6H, STEP_15M, align
+from app.research.elder.resample import OHLCV, STEP_1D, STEP_4H, STEP_30M, align
 
 _UTC = timezone.utc
 _EPOCH = datetime(1970, 1, 1, tzinfo=_UTC)
 
-DROP_REASONS = ('stop_wrong_side', 'stop_too_close_atr', 'costs_over_cap', 'no_6h_context')
+#: Step of each screen. Every place that needs a bar length reads these.
+RIPPLE_STEP = STEP_30M
+WAVE_STEP = STEP_4H
+TIDE_STEP = STEP_1D
+
+DROP_REASONS = ('stop_wrong_side', 'stop_too_close_atr', 'costs_over_cap', 'no_wave_context')
 
 
 @dataclass(frozen=True)
@@ -109,40 +123,42 @@ class SignalContext:
     Fields (all lists are index-aligned within their timeframe):
 
     * ``params``: the params the wave and tide series were built with.
-    * ``bars_15m``: 15m bars as stored (may have holes), strictly sorted.
-    * ``bars_6h``: 6H bars aligned to the 6H grid, ``None`` where a bucket is
-      missing. ``close_times_6h[i]`` is the close time of slot ``i``, also for a
-      ``None`` slot.
-    * ``atr_6h``: Wilder ATR14 per 6H slot. ``impulse_6h``: Impulse per slot.
+    * ``bars_ripple``: ripple bars (``RIPPLE_STEP``) as given (may have holes),
+      strictly sorted. ``Entry.fill_index`` indexes this list.
+    * ``bars_wave``: wave bars aligned to the ``WAVE_STEP`` grid, ``None`` where
+      a bar is missing. ``close_times_wave[i]`` is the close time of slot ``i``,
+      also for a ``None`` slot.
+    * ``atr_wave``: Wilder ATR14 per wave slot. ``impulse_wave``: Impulse per slot.
     * ``wave_long`` / ``wave_short``: wave active for that direction at the
-      6H slot, including ``wave_block_impulse``.
-    * ``bars_1w`` / ``close_times_1w``: same for the weekly bars.
-    * ``tide_dir_1w``: tide direction per weekly slot (+1/-1/0, ``None`` when
-      cold or a hole). ``impulse_1w``: weekly Impulse per slot.
+      wave slot, including ``wave_block_impulse``.
+    * ``bars_tide`` / ``close_times_tide``: same for the tide bars (``TIDE_STEP``).
+    * ``tide_dir``: tide direction per tide slot (+1/-1/0, ``None`` when
+      cold or a hole). ``impulse_tide``: tide Impulse per slot.
     """
 
     params: ElderParams
-    bars_15m: list[OHLCV]
-    bars_6h: list[OHLCV | None]
-    close_times_6h: list[datetime]
-    atr_6h: list[float | None]
-    impulse_6h: list[int | None]
+    bars_ripple: list[OHLCV]
+    bars_wave: list[OHLCV | None]
+    close_times_wave: list[datetime]
+    atr_wave: list[float | None]
+    impulse_wave: list[int | None]
     wave_long: list[bool]
     wave_short: list[bool]
-    bars_1w: list[OHLCV | None]
-    close_times_1w: list[datetime]
-    tide_dir_1w: list[int | None]
-    impulse_1w: list[int | None]
+    bars_tide: list[OHLCV | None]
+    close_times_tide: list[datetime]
+    tide_dir: list[int | None]
+    impulse_tide: list[int | None]
 
 
 @dataclass(frozen=True)
 class Entry:
     """A filled, filtered entry.
 
-    ``armed_time``: open of the 15m bar that armed the order. ``fill_time``: open
-    of the filling 15m bar. ``wave_close_time`` / ``tide_close_time``: close times
-    of the last closed 6H and 1W bars at ``fill_time`` (audit trail; both must be
-    ``<= fill_time``).
+    ``armed_time``: open of the ripple bar that armed the order. ``fill_time``:
+    open of the filling ripple bar; ``fill_index`` indexes ``ctx.bars_ripple``.
+    ``atr_wave``: wave ATR(14) at the last closed wave bar. ``wave_close_time`` /
+    ``tide_close_time``: close times of the last closed wave and tide bars at
+    ``fill_time`` (audit trail; both must be ``<= fill_time``).
     """
 
     coin: str
@@ -153,7 +169,7 @@ class Entry:
     fill_price: float
     stop: float
     r: float
-    atr_6h: float
+    atr_wave: float
     wave_close_time: datetime
     tide_close_time: datetime
 
@@ -207,16 +223,16 @@ def _sign(value: float | None) -> int | None:
     return 0
 
 
-def _validate_15m(bars: Sequence[OHLCV]) -> None:
+def _validate_ripple(bars: Sequence[OHLCV]) -> None:
     previous: datetime | None = None
     for bar in bars:
         opened = bar.open_time
         if opened.tzinfo is None or opened.utcoffset() is None:
-            raise ValueError('15m bar open_time must be timezone-aware')
-        if (opened - _EPOCH) % STEP_15M != timedelta(0):
-            raise ValueError(f'15m bar open_time {opened.isoformat()} is not on the 15m grid')
+            raise ValueError('ripple bar open_time must be timezone-aware')
+        if (opened - _EPOCH) % RIPPLE_STEP != timedelta(0):
+            raise ValueError(f'ripple bar open_time {opened.isoformat()} is not on the {RIPPLE_STEP} grid')
         if previous is not None and opened <= previous:
-            raise ValueError(f'15m bars are not strictly sorted at {opened.isoformat()}')
+            raise ValueError(f'ripple bars are not strictly sorted at {opened.isoformat()}')
         previous = opened
 
 
@@ -246,13 +262,13 @@ def _tide_series(closes: Sequence[float | None], mode: str) -> list[int | None]:
 
 
 def _wave_series(
-    bars_6h: Sequence[OHLCV | None],
+    bars_wave: Sequence[OHLCV | None],
     atr: Sequence[float | None],
-    impulse_6h: Sequence[int | None],
+    impulse_wave: Sequence[int | None],
     params: ElderParams,
 ) -> tuple[list[bool], list[bool]]:
-    _, highs, lows, closes, volumes = ohlcv_fields(bars_6h)
-    n = len(bars_6h)
+    _, highs, lows, closes, volumes = ohlcv_fields(bars_wave)
+    n = len(bars_wave)
     thr = params.wave_threshold
     long_ok = [False] * n
     short_ok = [False] * n
@@ -291,7 +307,7 @@ def _wave_series(
 
     if params.wave_block_impulse:
         for i in range(n):
-            imp = impulse_6h[i]
+            imp = impulse_wave[i]
             if imp is None:
                 long_ok[i] = short_ok[i] = False
                 continue
@@ -303,43 +319,44 @@ def _wave_series(
 
 
 def build_context(
-    bars_15m: Sequence[OHLCV],
-    bars_6h: Sequence[OHLCV],
-    bars_1w: Sequence[OHLCV],
+    bars_ripple: Sequence[OHLCV],
+    bars_wave: Sequence[OHLCV],
+    bars_tide: Sequence[OHLCV],
     params: ElderParams,
 ) -> SignalContext:
-    """Align the 6H and 1W bars, compute every indicator once, prebuild close times.
+    """Align the wave and tide bars, compute every indicator once, prebuild close times.
 
-    ``bars_6h`` / ``bars_1w`` come from ``to_6h`` / ``to_1w`` (skipped buckets
-    become ``None`` slots). ``bars_15m`` is as stored (holes allowed). Must be
-    strictly sorted by open time.
+    ``bars_ripple`` comes from ``to_30m`` (holes allowed), ``bars_wave`` is the
+    stored 4h series (holes become ``None`` slots) and ``bars_tide`` comes from
+    ``to_1d`` (a skipped day becomes a ``None`` slot). Each must be strictly
+    sorted by open time.
     """
-    _validate_15m(bars_15m)
-    aligned_6h = align(bars_6h, STEP_6H)
-    aligned_1w = align(bars_1w, STEP_1W)
+    _validate_ripple(bars_ripple)
+    aligned_wave = align(bars_wave, WAVE_STEP)
+    aligned_tide = align(bars_tide, TIDE_STEP)
 
-    _, highs6, lows6, closes6, _ = ohlcv_fields(aligned_6h)
-    atr_6h = wilder_atr(highs6, lows6, closes6, ATR_PERIOD)
-    impulse_6h = impulse(closes6, EMA_PERIOD, MACD_FAST, MACD_SLOW, MACD_SIGNAL)
-    wave_long, wave_short = _wave_series(aligned_6h, atr_6h, impulse_6h, params)
+    _, highs_wave, lows_wave, closes_wave, _ = ohlcv_fields(aligned_wave)
+    atr_wave = wilder_atr(highs_wave, lows_wave, closes_wave, ATR_PERIOD)
+    impulse_wave = impulse(closes_wave, EMA_PERIOD, MACD_FAST, MACD_SLOW, MACD_SIGNAL)
+    wave_long, wave_short = _wave_series(aligned_wave, atr_wave, impulse_wave, params)
 
-    _, _, _, closes1w, _ = ohlcv_fields(aligned_1w)
-    tide_dir = _tide_series(closes1w, params.tide_mode)
-    impulse_1w = impulse(closes1w, EMA_PERIOD, MACD_FAST, MACD_SLOW, MACD_SIGNAL)
+    _, _, _, closes_tide, _ = ohlcv_fields(aligned_tide)
+    tide_dir = _tide_series(closes_tide, params.tide_mode)
+    impulse_tide = impulse(closes_tide, EMA_PERIOD, MACD_FAST, MACD_SLOW, MACD_SIGNAL)
 
     return SignalContext(
         params=params,
-        bars_15m=list(bars_15m),
-        bars_6h=aligned_6h,
-        close_times_6h=_slot_close_times(aligned_6h, STEP_6H),
-        atr_6h=atr_6h,
-        impulse_6h=impulse_6h,
+        bars_ripple=list(bars_ripple),
+        bars_wave=aligned_wave,
+        close_times_wave=_slot_close_times(aligned_wave, WAVE_STEP),
+        atr_wave=atr_wave,
+        impulse_wave=impulse_wave,
         wave_long=wave_long,
         wave_short=wave_short,
-        bars_1w=aligned_1w,
-        close_times_1w=_slot_close_times(aligned_1w, STEP_1W),
-        tide_dir_1w=tide_dir,
-        impulse_1w=impulse_1w,
+        bars_tide=aligned_tide,
+        close_times_tide=_slot_close_times(aligned_tide, TIDE_STEP),
+        tide_dir=tide_dir,
+        impulse_tide=impulse_tide,
     )
 
 
@@ -352,18 +369,18 @@ def _last_closed(close_times: Sequence[datetime], as_of: datetime) -> int | None
 
 
 def tide_at(ctx: SignalContext, as_of: datetime) -> tuple[int | None, int | None]:
-    """``(tide direction, weekly impulse)`` from the last weekly bar closed by ``as_of``.
+    """``(tide direction, tide impulse)`` from the last tide bar closed by ``as_of``.
 
     Direction by ``tide_mode``; zero slope is ``0``; cold or hole is ``None``.
     """
-    index = _last_closed(ctx.close_times_1w, as_of)
+    index = _last_closed(ctx.close_times_tide, as_of)
     if index is None:
         return None, None
-    return ctx.tide_dir_1w[index], ctx.impulse_1w[index]
+    return ctx.tide_dir[index], ctx.impulse_tide[index]
 
 
 def tide_permits(ctx: SignalContext, direction: int, as_of: datetime) -> bool:
-    """``tide == direction`` (nonzero) and weekly impulse is known and not ``-direction``."""
+    """``tide == direction`` (nonzero) and tide impulse is known and not ``-direction``."""
     _check_direction(direction)
     tide, imp = tide_at(ctx, as_of)
     if tide is None or tide != direction:
@@ -372,9 +389,9 @@ def tide_permits(ctx: SignalContext, direction: int, as_of: datetime) -> bool:
 
 
 def wave_active(ctx: SignalContext, direction: int, as_of: datetime) -> bool:
-    """Wave for ``direction`` on the last 6H bar closed by ``as_of``."""
+    """Wave for ``direction`` on the last wave bar closed by ``as_of``."""
     _check_direction(direction)
-    index = _last_closed(ctx.close_times_6h, as_of)
+    index = _last_closed(ctx.close_times_wave, as_of)
     return _wave_ok(ctx, direction, index)
 
 
@@ -401,14 +418,14 @@ def _stop_details(
 ) -> tuple[float | None, float | None, str | None]:
     """``(stop, atr, reason)``; ``stop`` is ``None`` iff ``reason`` is set."""
     _check_direction(direction)
-    index = _last_closed(ctx.close_times_6h, as_of)
+    index = _last_closed(ctx.close_times_wave, as_of)
     window = params.stop_lookback_bars
     if index is None or index - window + 1 < 0:
-        return None, None, 'no_6h_context'
-    bars = ctx.bars_6h[index - window + 1 : index + 1]
-    atr = ctx.atr_6h[index]
+        return None, None, 'no_wave_context'
+    bars = ctx.bars_wave[index - window + 1 : index + 1]
+    atr = ctx.atr_wave[index]
     if atr is None or any(bar is None for bar in bars):
-        return None, None, 'no_6h_context'
+        return None, None, 'no_wave_context'
     buffer = params.stop_atr_buffer * atr
     if direction > 0:
         stop = min(bar.low for bar in bars if bar is not None) - buffer
@@ -433,12 +450,12 @@ def stop_for(
     as_of: datetime,
     params: ElderParams,
 ) -> tuple[float | None, str | None]:
-    """Stop for a fill at ``fill_price``, from the 6H bars closed by ``as_of``.
+    """Stop for a fill at ``fill_price``, from the wave bars closed by ``as_of``.
 
-    Long: min low of the last ``stop_lookback_bars`` 6H bars minus
-    ``stop_atr_buffer`` x ATR (ATR of the last closed 6H bar); short: max high
+    Long: min low of the last ``stop_lookback_bars`` wave bars minus
+    ``stop_atr_buffer`` x ATR (ATR of the last closed wave bar); short: max high
     plus the buffer. Returns ``(stop, None)`` or ``(None, reason)`` with reason
-    in this check order: ``no_6h_context`` (a window bar or the ATR is missing),
+    in this check order: ``no_wave_context`` (a window bar or the ATR is missing),
     ``stop_wrong_side`` (R <= 0 or stop not on the loss side),
     ``stop_too_close_atr`` (R < ``min_stop_atr`` x ATR), ``costs_over_cap``
     (``COST_ROUND_TRIP`` x fill > ``MAX_COST_R`` x R).
@@ -462,7 +479,7 @@ def _try_fill(bars: Sequence[OHLCV], k: int, direction: int) -> float | None:
     if k == 0:
         return None
     previous = bars[k - 1]
-    if bar.open_time - previous.open_time != STEP_15M:
+    if bar.open_time - previous.open_time != RIPPLE_STEP:
         return None
     if direction > 0:
         level = previous.high
@@ -476,7 +493,7 @@ def _try_fill(bars: Sequence[OHLCV], k: int, direction: int) -> float | None:
 
 
 def generate_entries(coin: str, ctx: SignalContext, params: ElderParams) -> SignalResult:
-    """All entries over every 15m bar in ``ctx``; the runner filters by period later.
+    """All entries over every ripple bar in ``ctx``; the runner filters by period later.
 
     Lifecycle in the module docstring. Positions are not tracked: every fill is
     emitted and the E5 runner skips fills while a position is open. ``params``
@@ -494,14 +511,14 @@ def generate_entries(coin: str, ctx: SignalContext, params: ElderParams) -> Sign
 
     result = SignalResult()
     counts = result.counts
-    bars = ctx.bars_15m
+    bars = ctx.bars_ripple
     expiry = params.ripple_expiry_bars
     pending: _Pending | None = None
     previous_slot: int | None = None
 
     for k, bar in enumerate(bars):
         t = bar.open_time
-        slot = _last_closed(ctx.close_times_6h, t)
+        slot = _last_closed(ctx.close_times_wave, t)
         new_close = slot is not None and slot != previous_slot
         previous_slot = slot
 
@@ -540,8 +557,8 @@ def generate_entries(coin: str, ctx: SignalContext, params: ElderParams) -> Sign
                 Dropped(coin=coin, direction=d, fill_time=t, fill_price=fill_price, reason=str(reason))
             )
             continue
-        week = _last_closed(ctx.close_times_1w, t)
-        assert slot is not None and week is not None  # permitted tide and wave need both
+        tide_slot = _last_closed(ctx.close_times_tide, t)
+        assert slot is not None and tide_slot is not None  # permitted tide and wave need both
         result.entries.append(
             Entry(
                 coin=coin,
@@ -552,9 +569,9 @@ def generate_entries(coin: str, ctx: SignalContext, params: ElderParams) -> Sign
                 fill_price=fill_price,
                 stop=stop,
                 r=abs(fill_price - stop),
-                atr_6h=atr,
-                wave_close_time=ctx.close_times_6h[slot],
-                tide_close_time=ctx.close_times_1w[week],
+                atr_wave=atr,
+                wave_close_time=ctx.close_times_wave[slot],
+                tide_close_time=ctx.close_times_tide[tide_slot],
             )
         )
         counts['entries'] += 1

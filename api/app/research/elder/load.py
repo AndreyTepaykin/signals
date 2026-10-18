@@ -6,8 +6,8 @@ the stored value differs, so a Binance close (one millisecond earlier) cannot
 slip through.
 
 Lookahead guard: a bar is loaded only when ``close_time <= period_end``. Nothing
-that closes after the period end is held in memory. Weekly history starts at
-2024-10-01 (4h). 1h, 15m and settled funding start at 2025-10-01.
+that closes after the period end is held in memory. 4h history (wave and the
+daily tide) starts at 2024-10-01. 15m and settled funding start at 2025-10-01.
 
 Writes are not this module's job. :func:`readonly_connection` opens a
 transaction whose first statement is ``SET TRANSACTION READ ONLY``.
@@ -24,7 +24,7 @@ from typing import Any, Iterator
 
 from sqlalchemy import bindparam, text
 
-from app.research.elder.resample import STEP_15M, STEP_1H, STEP_4H, OHLCV
+from app.research.elder.resample import STEP_15M, STEP_4H, OHLCV
 from app.research.elder.simulate import FundingPrint
 
 UTC = timezone.utc
@@ -42,9 +42,9 @@ COINS: tuple[str, ...] = (
     'TRXUSDT',
 )
 
-#: Perp 4h history. The first full Monday week is 2024-10-07.
+#: Perp 4h history (wave bars, and the daily tide built from them).
 HISTORY_4H_START = datetime(2024, 10, 1, tzinfo=UTC)
-#: 1h, 15m and settled funding.
+#: 15m and settled funding.
 HISTORY_START = datetime(2025, 10, 1, tzinfo=UTC)
 
 TRAIN_START = datetime(2026, 1, 1, tzinfo=UTC)
@@ -101,7 +101,6 @@ class CoinData:
 
     coin: str
     bars_15m: list[OHLCV]
-    bars_1h: list[OHLCV]
     bars_4h: list[OHLCV]
     funding: list[FundingPrint]
 
@@ -205,14 +204,13 @@ def _candles(conn: Any, coin: str, timeframe: str, start: datetime, period_end: 
 def load_coin(conn: Any, coin: str, period_end: datetime) -> CoinData:
     """Load one coin. ``conn`` is a SQLAlchemy connection or session.
 
-    Only ``SELECT``. 4h from 2024-10-01; 1h, 15m and settled funding from
+    Only ``SELECT``. 4h from 2024-10-01; 15m and settled funding from
     2025-10-01. Every bar satisfies ``close_time <= period_end``.
     """
     end = _utc(period_end)
     return CoinData(
         coin=coin,
         bars_15m=_candles(conn, coin, '15m', HISTORY_START, end, STEP_15M),
-        bars_1h=_candles(conn, coin, '1h', HISTORY_START, end, STEP_1H),
         bars_4h=_candles(conn, coin, '4h', HISTORY_4H_START, end, STEP_4H),
         funding=_rows_to_funding(
             conn.execute(

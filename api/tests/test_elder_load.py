@@ -17,7 +17,7 @@ from app.research.elder.load import (
     readonly_connection,
     rows_to_ohlcv,
 )
-from app.research.elder.resample import STEP_15M, STEP_1H, STEP_4H
+from app.research.elder.resample import STEP_1H, STEP_4H, STEP_15M
 
 UTC = timezone.utc
 STEP = STEP_15M
@@ -92,7 +92,7 @@ def test_loader_keeps_only_bars_that_close_by_period_end(session):
         _candle('BTCUSDT', '15m', end - STEP_15M, STEP_15M, 11),
         _candle('BTCUSDT', '15m', end, STEP_15M, 99),
         _candle('BTCUSDT', '15m', HISTORY_START - STEP_15M, STEP_15M, 7),
-        # 1h: kept, and one that closes after the end.
+        # 1h rows exist in the table but the loader no longer reads them.
         _candle('BTCUSDT', '1h', end - STEP_1H, STEP_1H, 21),
         _candle('BTCUSDT', '1h', end, STEP_1H, 98),
         # 4h: history start kept, the bar before it dropped, a bar after the end dropped.
@@ -126,14 +126,14 @@ def test_loader_keeps_only_bars_that_close_by_period_end(session):
     loaded = load_coin(session, 'BTCUSDT', end)
     assert [bar.close for bar in loaded.bars_15m] == [11.0]
     assert loaded.bars_15m[0].close_time == end
-    assert [bar.close for bar in loaded.bars_1h] == [21.0]
+    assert not hasattr(loaded, 'bars_1h')
     assert [bar.close for bar in loaded.bars_4h] == [31.0]
     assert loaded.bars_4h[0].open_time == HISTORY_4H_START
     assert [(item.funding_time, item.rate, item.mark_price) for item in loaded.funding] == [
         (datetime(2026, 2, 1, tzinfo=UTC), float(Decimal('0.0001')), 100.0),
         (end, float(Decimal('0.0002')), None),
     ]
-    assert all(bar.close_time <= end for bar in loaded.bars_15m + loaded.bars_1h + loaded.bars_4h)
+    assert all(bar.close_time <= end for bar in loaded.bars_15m + loaded.bars_4h)
 
 
 def test_latest_common_end_is_the_minimum_across_coins(session):

@@ -23,7 +23,7 @@ DEFAULT = SPACE_PATH.with_name('params_default.json')
 
 
 def _coins():
-    return [CoinData(coin, [], [], [], []) for coin in COINS]
+    return [CoinData(coin, [], [], []) for coin in COINS]
 
 
 def _install(monkeypatch, seen):
@@ -70,8 +70,8 @@ def test_default_params_match_the_space_and_endpoints_are_inclusive():
     assert check(t1_share=0.2).t1_share == 0.2
     assert check(t1_share=0.8).t1_share == 0.8
     assert check(ripple_expiry_bars=1).ripple_expiry_bars == 1
-    assert check(ripple_expiry_bars=96).ripple_expiry_bars == 96
-    assert check(stop_lookback_bars=10).stop_lookback_bars == 10
+    assert check(ripple_expiry_bars=48).ripple_expiry_bars == 48
+    assert check(stop_lookback_bars=12).stop_lookback_bars == 12
     assert check(wave_osc='stoch', wave_threshold=5.0).wave_threshold == 5.0
     assert check(wave_osc='stoch', wave_threshold=50.0).wave_threshold == 50.0
     assert check(wave_osc='force2', wave_threshold=2.0).wave_threshold == 2.0
@@ -80,8 +80,8 @@ def test_default_params_match_the_space_and_endpoints_are_inclusive():
         {'trail_atr': 6.1},
         {'trail_atr': 0.9},
         {'t1_share': 0.19},
-        {'ripple_expiry_bars': 97},
-        {'stop_lookback_bars': 11},
+        {'ripple_expiry_bars': 49},
+        {'stop_lookback_bars': 13},
         {'wave_osc': 'stoch', 'wave_threshold': 4.9},
         {'wave_osc': 'stoch', 'wave_threshold': 50.1},
         {'wave_osc': 'force2', 'wave_threshold': 2.1},

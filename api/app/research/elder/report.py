@@ -26,7 +26,7 @@ import numpy as np
 from app.core.stats.summary import bootstrap_interval, max_drawdown, profit_factor
 from app.research.elder.load import CoinData
 from app.research.elder.params import ElderParams
-from app.research.elder.resample import to_1w, to_6h
+from app.research.elder.resample import to_1d, to_30m
 from app.research.elder.signals import (
     DROP_REASONS,
     Entry,
@@ -111,20 +111,20 @@ class CoinResult:
     signal_cache: dict[str, dict[str, int]] = field(default_factory=dict, repr=False)
 
     def counts_before(self, cut: datetime) -> dict[str, int]:
-        """Signal counts on 15m bars with ``open_time < cut`` (not position-filtered)."""
+        """Signal counts on ripple bars with ``open_time < cut`` (not position-filtered)."""
         cut = _utc(cut)
         key = cut.isoformat()
         cached = self.signal_cache.get(key)
         if cached is not None:
             return dict(cached)
-        bars = self.context.bars_15m
+        bars = self.context.bars_ripple
         prefix = _prefix(bars, cut)
         if len(prefix) == len(bars):
             counts = dict(self.full_counts)
         elif not prefix:
             counts = _zeros()
         else:
-            sliced = replace(self.context, bars_15m=prefix)
+            sliced = replace(self.context, bars_ripple=prefix)
             counts = dict(generate_entries(self.coin, sliced, self.context.params).counts)
         self.signal_cache[key] = counts
         return dict(counts)
@@ -147,12 +147,11 @@ class PeriodResult:
 
 def _prepare(coin: CoinData, end: datetime, params: ElderParams) -> tuple[SignalContext, list[FundingPrint]]:
     bars_15m = [bar for bar in coin.bars_15m if bar.close_time <= end]
-    bars_1h = [bar for bar in coin.bars_1h if bar.close_time <= end]
     bars_4h = [bar for bar in coin.bars_4h if bar.close_time <= end]
     funding = [item for item in coin.funding if item.funding_time <= end]
     if bars_15m and bars_15m[-1].open_time >= end:
         raise RuntimeError(f'{coin.coin} has a 15m bar that opens at or after {end.isoformat()}')
-    context = build_context(bars_15m, to_6h(bars_1h), to_1w(bars_4h), params)
+    context = build_context(to_30m(bars_15m), bars_4h, to_1d(bars_4h), params)
     return context, funding
 
 
@@ -160,21 +159,21 @@ def _window_signal_counts(coin: str, ctx: SignalContext, start: datetime, end: d
     """Counts for events on bars with ``start <= open_time`` and ``close_time <= end``.
 
     The context is already truncated at ``end``. Counts before ``start`` are
-    subtracted. The walk is causal, so the prefix of the 15m series reproduces
+    subtracted. The walk is causal, so the prefix of the ripple series reproduces
     the prefix of the counts. Returned entries keep ``fill_index`` into ``ctx``.
     """
     full = generate_entries(coin, ctx, ctx.params)
     ctx_end = end.isoformat()
-    if not ctx.bars_15m or ctx.bars_15m[0].open_time >= start:
+    if not ctx.bars_ripple or ctx.bars_ripple[0].open_time >= start:
         window = dict(full.counts)
         prefix_counts = _zeros()
     else:
-        prefix_bars = _prefix(ctx.bars_15m, start)
-        if len(prefix_bars) == len(ctx.bars_15m):
+        prefix_bars = _prefix(ctx.bars_ripple, start)
+        if len(prefix_bars) == len(ctx.bars_ripple):
             window = _zeros()
             prefix_counts = dict(full.counts)
         else:
-            prefix_counts = dict(generate_entries(coin, replace(ctx, bars_15m=prefix_bars), ctx.params).counts)
+            prefix_counts = dict(generate_entries(coin, replace(ctx, bars_ripple=prefix_bars), ctx.params).counts)
             window = _sub_counts(full.counts, prefix_counts)
     entries = [entry for entry in full.entries if start <= entry.fill_time < end]
     dropped = [item for item in full.dropped if start <= item.fill_time < end]
@@ -464,14 +463,14 @@ def _pack_time_order(entries: Sequence[Any], target: int, simulate: Callable[[An
 
 
 def _tide_entries(coin: str, ctx: SignalContext, params: ElderParams, start: datetime, end: datetime) -> list[Entry]:
-    """15m bars in ``[start, end)`` where the tide permits its own direction, with a valid stop.
+    """Ripple bars in ``[start, end)`` where the tide permits its own direction, with a valid stop.
 
     The entry is at the bar's open. ``armed_time`` equals ``fill_time``. Wave and
     tide close times are the bars visible at that open. A dropped stop is not a
     candidate.
     """
     found: list[Entry] = []
-    for index, bar in enumerate(ctx.bars_15m):
+    for index, bar in enumerate(ctx.bars_ripple):
         if bar.open_time < start or bar.open_time >= end:
             continue
         tide, _impulse = tide_at(ctx, bar.open_time)
@@ -480,11 +479,11 @@ def _tide_entries(coin: str, ctx: SignalContext, params: ElderParams, start: dat
         stop, _reason = stop_for(ctx, tide, bar.open, bar.open_time, params)
         if stop is None:
             continue
-        slot = _closed_index(ctx.close_times_6h, bar.open_time)
-        week = _closed_index(ctx.close_times_1w, bar.open_time)
-        if slot is None or week is None:
+        slot = _closed_index(ctx.close_times_wave, bar.open_time)
+        tide_slot = _closed_index(ctx.close_times_tide, bar.open_time)
+        if slot is None or tide_slot is None:
             continue
-        atr = ctx.atr_6h[slot]
+        atr = ctx.atr_wave[slot]
         if atr is None:
             continue
         found.append(
@@ -497,9 +496,9 @@ def _tide_entries(coin: str, ctx: SignalContext, params: ElderParams, start: dat
                 fill_price=bar.open,
                 stop=stop,
                 r=abs(bar.open - stop),
-                atr_6h=float(atr),
-                wave_close_time=ctx.close_times_6h[slot],
-                tide_close_time=ctx.close_times_1w[week],
+                atr_wave=float(atr),
+                wave_close_time=ctx.close_times_wave[slot],
+                tide_close_time=ctx.close_times_tide[tide_slot],
             )
         )
     return found

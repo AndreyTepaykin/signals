@@ -12,8 +12,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.research.elder.params import COST_ROUND_TRIP, T2_R, ElderParams
-from app.research.elder.resample import OHLCV, STEP_15M
-from app.research.elder.signals import Entry, build_context
+from app.research.elder.resample import STEP_4H, OHLCV
+from app.research.elder.signals import RIPPLE_STEP, Entry, build_context
 from app.research.elder.simulate import (
     FundingPrint,
     PartExit,
@@ -24,7 +24,7 @@ from app.research.elder.simulate import (
 
 UTC = timezone.utc
 T0 = datetime(2026, 1, 5, tzinfo=UTC)
-M15 = timedelta(minutes=15)
+M30 = timedelta(minutes=30)  # one ripple bar
 FAR = T0 + timedelta(days=400)
 E0 = 100.0
 DIST = 5.0
@@ -55,11 +55,11 @@ def px(d, v):
 
 
 def at(i):
-    return T0 + i * M15
+    return T0 + i * M30
 
 
 def make_bars(d, rows, skip=()):
-    """rows: long-form (open, high, low, close) per 15m index; mirrored for a short."""
+    """rows: long-form (open, high, low, close) per ripple-bar index; mirrored for a short."""
     out = []
     for i, (o, h, l, c) in enumerate(rows):
         if i in skip:
@@ -81,33 +81,33 @@ def make_entry(d, bars, fill_index=0, entry=E0, dist=DIST, coin='BTCUSDT'):
         fill_price=entry,
         stop=stop,
         r=dist,
-        atr_6h=1.0,
+        atr_wave=1.0,
         wave_close_time=T0,
         tide_close_time=T0,
     )
 
 
-def make_ctx(bars, d, tide=None, six=None):
-    """tide: [(close_time, tide_dir, impulse)]; six: [(close_time, atr)] (fake 6H closes)."""
+def make_ctx(bars, d, tide=None, wave=None):
+    """tide: [(close_time, tide_dir, impulse)]; wave: [(close_time, atr)] (fake wave closes)."""
     base = build_context([], [], [], P())
     tide = tide if tide is not None else [(T0 - timedelta(days=1), d, d)]
-    six = six or []
+    wave = wave or []
     return replace(
         base,
-        bars_15m=list(bars),
-        close_times_1w=[t[0] for t in tide],
-        tide_dir_1w=[t[1] for t in tide],
-        impulse_1w=[t[2] for t in tide],
-        close_times_6h=[s[0] for s in six],
-        atr_6h=[s[1] for s in six],
+        bars_ripple=list(bars),
+        close_times_tide=[t[0] for t in tide],
+        tide_dir=[t[1] for t in tide],
+        impulse_tide=[t[2] for t in tide],
+        close_times_wave=[s[0] for s in wave],
+        atr_wave=[s[1] for s in wave],
     )
 
 
-def run(d, rows, *, params=None, funding=(), end=FAR, fill_index=0, tide=None, six=None, skip=()):
+def run(d, rows, *, params=None, funding=(), end=FAR, fill_index=0, tide=None, wave=None, skip=()):
     params = params or P()
     bars = make_bars(d, rows, skip)
     entry = make_entry(d, bars, fill_index)
-    ctx = make_ctx(bars, d, tide, six)
+    ctx = make_ctx(bars, d, tide, wave)
     return simulate_trade(entry, ctx, params, list(funding), end), bars
 
 
@@ -263,7 +263,7 @@ def test_bar_opening_above_t1_still_fills_at_t1(d):
 # ----------------------------------------------------------------- trailing
 
 
-SIX2 = [(at(4), 1.0), (at(8), 2.0)]
+WAVE2 = [(at(4), 1.0), (at(8), 2.0)]
 
 
 def trail_rows():
@@ -272,17 +272,17 @@ def trail_rows():
         (100, 108, 99.5, 107),  # T1
         (107, 109, 106, 108),
         (108, 110, 107, 109),
-        (109, 111, 108.5, 110),  # first bar to see the 6H close at at(4)
+        (109, 111, 108.5, 110),  # first bar to see the wave close at at(4)
         (110, 120, 109, 119),
         (119, 119, 110, 112),
         (112, 113, 111, 112),
-        (118, 119, 115, 116),  # sees the 6H close at at(8)
+        (118, 119, 115, 116),  # sees the wave close at at(8)
     ]
 
 
 @BOTH
-def test_trailing_updates_only_at_a_6h_close_and_exits_with_trail_kind(d):
-    t, bars = run(d, trail_rows(), six=SIX2)
+def test_trailing_updates_only_at_a_wave_close_and_exits_with_trail_kind(d):
+    t, bars = run(d, trail_rows(), wave=WAVE2)
     st = t.exits[-1]
     # bar 4: candidate = max high of bars 0..3 (110) - 2 * 1.0 = 108, bars 5..7 do not change it
     # bar 8: candidate = max high of bars 0..7 (120) - 2 * 2.0 = 116, touched on bar 8, open 118 above it
@@ -290,7 +290,7 @@ def test_trailing_updates_only_at_a_6h_close_and_exits_with_trail_kind(d):
     assert st.price == approx(px(d, 116)) and st.time == bars[8].close_time
     assert t.price_r == approx(0.5 * 1.5 + 0.5 * (16 / 5))
     assert t.last_index == 8
-    walk = _walk(make_entry(d, bars), make_ctx(bars, d, six=SIX2), P(), FAR)
+    walk = _walk(make_entry(d, bars), make_ctx(bars, d, wave=WAVE2), P(), FAR)
     assert [(i, k) for i, _, k in walk.stop_history] == [(0, 'initial'), (2, 'breakeven'), (4, 'trail'), (8, 'trail')]
     stops = [s for _, s, _ in walk.stop_history]
     assert [d * (b - a) > 0 for a, b in zip(stops, stops[1:])] == [True, True, True]
@@ -300,47 +300,83 @@ def test_trailing_updates_only_at_a_6h_close_and_exits_with_trail_kind(d):
 def test_trailing_uses_only_highs_of_previous_bars(d):
     rows = trail_rows()
     rows[4] = (109, 111, 107.9, 108.5)  # touches 108 = (bar 3's 110) - 2; a lookahead to bar 4's 111 would give 109
-    t, _ = run(d, rows, six=SIX2)
+    t, _ = run(d, rows, wave=WAVE2)
     assert t.exits[-1].price == approx(px(d, 108)) and t.exits[-1].stop_kind == 'trail'
     assert t.last_index == 4
 
 
 @BOTH
 def test_trailing_never_loosens(d):
-    six = [(at(4), 1.0), (at(8), 10.0)]  # second candidate 120 - 20 = 100 < current 108
+    wave = [(at(4), 1.0), (at(8), 10.0)]  # second candidate 120 - 20 = 100 < current 108
     rows = trail_rows()[:8] + [(112, 113, 111, 112), (112, 112, 107, 108)]
-    t, _ = run(d, rows, six=six)
-    walk = _walk(make_entry(d, make_bars(d, rows)), make_ctx(make_bars(d, rows), d, six=six), P(), FAR)
+    t, _ = run(d, rows, wave=wave)
+    walk = _walk(make_entry(d, make_bars(d, rows)), make_ctx(make_bars(d, rows), d, wave=wave), P(), FAR)
     assert [i for i, _, k in walk.stop_history if k == 'trail'] == [4]
     assert t.exits[-1].price == approx(px(d, 108)) and t.exits[-1].stop_kind == 'trail'
 
 
 @BOTH
 def test_trailing_with_missing_atr_does_not_update(d):
-    six = [(at(4), None)]
+    wave = [(at(4), None)]
     rows = trail_rows()[:5] + [(110, 112, 99, 100)]
-    t, _ = run(d, rows, six=six)
+    t, _ = run(d, rows, wave=wave)
     assert t.exits[-1].stop_kind == 'breakeven' and t.exits[-1].price == approx(E0)
 
 
 @BOTH
-def test_a_6h_close_before_t1_is_not_a_trail_update(d):
-    six = [(at(2), 1.0)]  # visible at bar 2, T1 is hit on bar 3
+def test_a_wave_close_before_t1_is_not_a_trail_update(d):
+    wave = [(at(2), 1.0)]  # visible at bar 2, T1 is hit on bar 3
     rows = [FILL, (100, 101, 99.5, 100.5), (100.5, 102, 100, 101), (101, 108, 99.5, 107), (107, 109, 106, 108), (108, 108, 99, 100)]
-    t, bars = run(d, rows, six=six)
-    walk = _walk(make_entry(d, bars), make_ctx(bars, d, six=six), P(), FAR)
+    t, bars = run(d, rows, wave=wave)
+    walk = _walk(make_entry(d, bars), make_ctx(bars, d, wave=wave), P(), FAR)
     assert [k for _, _, k in walk.stop_history] == ['initial', 'breakeven']
     assert t.exits[-1].stop_kind == 'breakeven'
 
 
 @BOTH
 def test_trail_candidate_above_open_gaps_out_at_the_open(d):
-    six = [(at(3), 0.1)]  # candidate = 110 - 0.2 = 109.8; bar 3 opens at 109
+    wave = [(at(3), 0.1)]  # candidate = 110 - 0.2 = 109.8; bar 3 opens at 109
     rows = [FILL, (100, 108, 99.5, 107), (107, 110, 106, 109), (109, 109.5, 108, 109)]
-    t, bars = run(d, rows, params=P(trail_atr=2.0), six=six)
+    t, bars = run(d, rows, params=P(trail_atr=2.0), wave=wave)
     st = t.exits[-1]
     assert (st.stop_kind, st.gapped) == ('trail', True)
     assert st.price == approx(px(d, 109)) and st.time == bars[3].open_time
+
+
+def real_wave_ctx(bars, d):
+    """A context whose wave series is real 4H bars (flat, ATR 2.0): wave slot 20 closes at T0."""
+    wave_bars = []
+    for i in range(30):
+        opened = T0 - 21 * STEP_4H + i * STEP_4H
+        wave_bars.append(OHLCV(opened, opened + STEP_4H, 100.0, 101.0, 99.0, 100.0, 10.0))
+    base = build_context([], wave_bars, [], P())
+    assert base.atr_wave[20] == approx(2.0) and base.atr_wave[21] == approx(2.0)
+    assert base.close_times_wave[20] == T0
+    return replace(
+        base,
+        bars_ripple=list(bars),
+        close_times_tide=[T0 - timedelta(days=1)],
+        tide_dir=[d],
+        impulse_tide=[d],
+    )
+
+
+@BOTH
+def test_trailing_updates_at_the_4h_close_not_every_30m_bar(d):
+    # 4H closes at T0 + 4h are bar 8 of the 30m series. Bars 2..7 have highs up to 112; bar 7 dips
+    # to 106, which a trail already set from that high (112 - 2 x 2.0 = 108) would have stopped.
+    rows = [FILL, (100, 108, 99.5, 107.5), (107.5, 112, 106, 111)]
+    rows += [(111, 112, 106, 110)] * 5  # bars 3 .. 7
+    rows += [(111, 111.5, 107.9, 108.5)]  # bar 8: first bar to see the 4H close; trail 108 is touched
+    bars = make_bars(d, rows)
+    assert (bars[8].open_time - T0) == STEP_4H
+    t = simulate_trade(make_entry(d, bars), real_wave_ctx(bars, d), P(trail_atr=2.0), [], FAR)
+    assert [x.reason for x in t.exits] == ['t1', 'stop']
+    st = t.exits[-1]
+    assert (st.stop_kind, st.gapped) == ('trail', False)
+    assert st.price == approx(px(d, 108.0)) and st.time == bars[8].close_time
+    assert t.last_index == 8 and t.hit_t1 and not t.censored
+    assert t.price_r == approx(0.5 * 1.5 + 0.5 * 1.6)
 
 
 # ----------------------------------------------------------------- T2 cap
@@ -387,7 +423,7 @@ def test_tide_flip_exits_at_the_open(d):
 
 
 @BOTH
-def test_weekly_impulse_against_exits_even_with_tide_unchanged(d):
+def test_tide_impulse_against_exits_even_with_tide_unchanged(d):
     tide = [(T0 - timedelta(days=1), d, d), (at(2), d, -d)]
     t, bars = run(d, [FILL, (100, 102, 99, 101), (101, 103, 100, 102)], tide=tide)
     assert t.exits[0].reason == 'tide_exit' and t.exits[0].time == bars[2].open_time
@@ -585,7 +621,7 @@ def test_data_that_ends_is_end_of_period(d):
 
 
 @BOTH
-def test_15m_hole_censors_at_the_last_bar_before_it(d):
+def test_ripple_hole_censors_at_the_last_bar_before_it(d):
     rows = CUT_ROWS[:4] + [(109, 111, 108.5, 109.5), (90, 91, 80, 85)]
     t, _ = run(d, rows, skip=(3,))  # bar 3 missing: bars 0,1,2 then 4
     assert t.censored and t.censor_reason == 'hole'
@@ -657,13 +693,13 @@ def random_case(rng):
     dist = entry_price * rng.choice([0.004, 0.008, 0.015, 0.03])
     entry = Entry(
         coin='ETHUSDT', direction=d, armed_time=at(0), fill_time=at(0), fill_index=0,
-        fill_price=entry_price, stop=entry_price - d * dist, r=dist, atr_6h=1.0,
+        fill_price=entry_price, stop=entry_price - d * dist, r=dist, atr_wave=1.0,
         wave_close_time=T0, tide_close_time=T0,
     )
-    six = []
+    wave = []
     j = rng.randint(1, 20)
     while j < n + 24:
-        six.append((at(j), None if rng.random() < 0.1 else entry_price * rng.uniform(0.002, 0.03)))
+        wave.append((at(j), None if rng.random() < 0.1 else entry_price * rng.uniform(0.002, 0.03)))
         j += 24
     tide = [(T0 - timedelta(days=1), d if rng.random() < 0.85 else rng.choice([0, -d]), d if rng.random() < 0.85 else rng.choice([0, -d, None]))]
     for j in range(rng.randint(0, 3)):
@@ -681,7 +717,7 @@ def random_case(rng):
         trail_atr=rng.uniform(0.3, 4.0),
     )
     end = FAR if rng.random() < 0.6 else at(rng.randint(1, n + 1))
-    return d, bars, entry, make_ctx(bars, d, tide, six), params, funding, end
+    return d, bars, entry, make_ctx(bars, d, tide, wave), params, funding, end
 
 
 def check_trade(t, walk, d, entry, bars, params, end):
@@ -741,8 +777,8 @@ def check_trade(t, walk, d, entry, bars, params, end):
         assert all(b.close_time <= end for b in bars[t.fill_index : t.last_index + 1])
     if t.censor_reason == 'hole':
         nxt = t.last_index + 1
-        assert nxt < len(bars) and bars[nxt].open_time != bars[t.last_index].open_time + STEP_15M
-        assert bars[t.last_index].close_time + STEP_15M <= end
+        assert nxt < len(bars) and bars[nxt].open_time != bars[t.last_index].open_time + RIPPLE_STEP
+        assert bars[t.last_index].close_time + RIPPLE_STEP <= end
 
 
 def test_randomized_invariants_over_many_trades():
@@ -758,7 +794,7 @@ def test_randomized_invariants_over_many_trades():
             OHLCV(b.open_time, b.close_time, 1e-3, 1e9, 1e-6, 5e8, 1.0) if b.close_time > end else b
             for b in bars
         ]
-        assert simulate_trade(entry, replace(ctx, bars_15m=hidden), params, funding, end) == t
+        assert simulate_trade(entry, replace(ctx, bars_ripple=hidden), params, funding, end) == t
         for x in t.exits:
             seen['t1'] += x.reason == 't1'
             seen['t2'] += x.reason == 't2'
@@ -783,9 +819,9 @@ def test_long_and_short_are_mirror_images():
         m_entry = replace(entry, direction=-d, stop=pivot - entry.stop)
         m_ctx = replace(
             ctx,
-            bars_15m=mirrored,
-            tide_dir_1w=[None if v is None else -v for v in ctx.tide_dir_1w],
-            impulse_1w=[None if v is None else -v for v in ctx.impulse_1w],
+            bars_ripple=mirrored,
+            tide_dir=[None if v is None else -v for v in ctx.tide_dir],
+            impulse_tide=[None if v is None else -v for v in ctx.impulse_tide],
         )
         a = simulate_trade(entry, ctx, params, funding, end)
         b = simulate_trade(m_entry, m_ctx, params, funding, end)
