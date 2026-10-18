@@ -1,0 +1,14 @@
+{
+  "tide_mode": "both",
+  "wave_osc": "force2",
+  "wave_threshold": 0.5,
+  "wave_block_impulse": true,
+  "ripple_expiry_bars": 4,
+  "stop_lookback_bars": 6,
+  "stop_atr_buffer": 0.5,
+  "min_stop_atr": 1.0,
+  "t1_r": 1.5,
+  "t1_share": 0.5,
+  "be_after_t1": false,
+  "trail_atr": 3.0
+}

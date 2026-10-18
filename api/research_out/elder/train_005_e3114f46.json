@@ -1,0 +1,3160 @@
+{
+  "start": "2026-01-01T00:00:00+00:00",
+  "end": "2026-07-01T00:00:00+00:00",
+  "params": {
+    "tide_mode": "both",
+    "wave_osc": "elder_ray",
+    "wave_threshold": 1.0,
+    "wave_block_impulse": true,
+    "ripple_expiry_bars": 4,
+    "stop_lookback_bars": 6,
+    "stop_atr_buffer": 0.5,
+    "min_stop_atr": 1.0,
+    "t1_r": 1.0,
+    "t1_share": 0.7,
+    "be_after_t1": true,
+    "trail_atr": 3.0
+  },
+  "params_hash": "e3114f468dd66f1867af8fe6a5a949a48e62f9b0ff676816e8da538b83b52289",
+  "objective": -0.1022810368121222,
+  "objective_feasible": true,
+  "overall": {
+    "n_closed": 12,
+    "n_censored": 0,
+    "n_trades": 12,
+    "weeks": 25.857142857142858,
+    "trades_per_week": 0.46408839779005523,
+    "p_t1": {
+      "k": 1,
+      "n": 12,
+      "p": 0.08333333333333333,
+      "interval": [
+        0.018816049516361844,
+        0.30116827943986885
+      ]
+    },
+    "p_t2": {
+      "k": 0,
+      "n": 12,
+      "p": 0.0,
+      "interval": [
+        0.0,
+        0.18398119474747684
+      ]
+    },
+    "p_stop_before_t1": {
+      "k": 6,
+      "n": 12,
+      "p": 0.5,
+      "interval": [
+        0.28553485437752546,
+        0.7144651456224745
+      ]
+    },
+    "e_r": -0.5249011563594023,
+    "e_r_interval": [
+      -0.7999267264255061,
+      -0.2400443080340655
+    ],
+    "profit_factor": 0.11900066436661022,
+    "profit_factor_note": null,
+    "max_drawdown": 6.298813876312828,
+    "roi": -0.0614335628905488,
+    "roi_interval": [
+      -0.1022810368121222,
+      -0.020996157002341843
+    ],
+    "max_drawdown_equity": 0.0614335628905488,
+    "max_open": 2,
+    "mean_open": 0.04558011049723757,
+    "r_quantiles": {
+      "p10": -1.045316525719269,
+      "p25": -1.036001839365036,
+      "p50": -0.6686518769697714,
+      "p75": -0.19729742866851419,
+      "p90": 0.02379324981752697
+    },
+    "r_histogram": {
+      "<=-1": 6,
+      "(-1,0]": 3,
+      "(0,1]": 3,
+      "(1,2]": 0,
+      "(2,5]": 0,
+      "(5,10]": 0,
+      ">10": 0
+    },
+    "hold_hours_mean": 16.5,
+    "hold_hours_median": 8.75,
+    "funnel": {
+      "arms": 14,
+      "fills": 12,
+      "expired": 2,
+      "cancelled": 0,
+      "entries": 12,
+      "dropped_stop_wrong_side": 0,
+      "dropped_stop_too_close_atr": 0,
+      "dropped_costs_over_cap": 0,
+      "dropped_no_wave_context": 0,
+      "skipped_opposite": 0,
+      "skipped_max_open": 0,
+      "skipped_overlap": 0,
+      "skipped_total": 0,
+      "trades": 12
+    },
+    "min_distance_drop_rate": 0.0,
+    "censored_trades": [],
+    "objective": -0.1022810368121222,
+    "objective_feasible": true
+  },
+  "per_coin": {
+    "BTCUSDT": {
+      "n_closed": 1,
+      "n_censored": 0,
+      "n_trades": 1,
+      "weeks": 25.857142857142858,
+      "trades_per_week": 0.03867403314917127,
+      "p_t1": {
+        "k": 0,
+        "n": 1,
+        "p": 0.0,
+        "interval": [
+          0.0,
+          0.7301340512159457
+        ]
+      },
+      "p_t2": {
+        "k": 0,
+        "n": 1,
+        "p": 0.0,
+        "interval": [
+          0.0,
+          0.7301340512159457
+        ]
+      },
+      "p_stop_before_t1": {
+        "k": 1,
+        "n": 1,
+        "p": 1.0,
+        "interval": [
+          0.2698659487840544,
+          1.0
+        ]
+      },
+      "e_r": -1.0458611024207185,
+      "e_r_interval": null,
+      "profit_factor": 0.0,
+      "profit_factor_note": null,
+      "max_drawdown": 1.0458611024207185,
+      "roi": -0.010458611024207198,
+      "roi_interval": [
+        -0.031048829428441005,
+        0.0
+      ],
+      "max_drawdown_equity": 0.010458611024207198,
+      "max_open": 1,
+      "mean_open": 0.0009208103130755065,
+      "r_quantiles": {
+        "p10": -1.0458611024207185,
+        "p25": -1.0458611024207185,
+        "p50": -1.0458611024207185,
+        "p75": -1.0458611024207185,
+        "p90": -1.0458611024207185
+      },
+      "r_histogram": {
+        "<=-1": 1,
+        "(-1,0]": 0,
+        "(0,1]": 0,
+        "(1,2]": 0,
+        "(2,5]": 0,
+        "(5,10]": 0,
+        ">10": 0
+      },
+      "hold_hours_mean": 4.0,
+      "hold_hours_median": 4.0,
+      "funnel": {
+        "arms": 1,
+        "fills": 1,
+        "expired": 0,
+        "cancelled": 0,
+        "entries": 1,
+        "dropped_stop_wrong_side": 0,
+        "dropped_stop_too_close_atr": 0,
+        "dropped_costs_over_cap": 0,
+        "dropped_no_wave_context": 0,
+        "skipped_opposite": 0,
+        "skipped_max_open": 0,
+        "skipped_overlap": 0,
+        "skipped_total": 0,
+        "trades": 1
+      },
+      "min_distance_drop_rate": 0.0,
+      "censored_trades": [],
+      "objective": -0.031048829428441005,
+      "objective_feasible": true,
+      "pnl_contribution": -0.009919849129568746
+    },
+    "ETHUSDT": {
+      "n_closed": 3,
+      "n_censored": 0,
+      "n_trades": 3,
+      "weeks": 25.857142857142858,
+      "trades_per_week": 0.11602209944751381,
+      "p_t1": {
+        "k": 0,
+        "n": 3,
+        "p": 0.0,
+        "interval": [
+          0.0,
+          0.47419557415751257
+        ]
+      },
+      "p_t2": {
+        "k": 0,
+        "n": 3,
+        "p": 0.0,
+        "interval": [
+          0.0,
+          0.47419557415751257
+        ]
+      },
+      "p_stop_before_t1": {
+        "k": 2,
+        "n": 3,
+        "p": 0.6666666666666666,
+        "interval": [
+          0.25353386828122426,
+          0.9217342736662715
+        ]
+      },
+      "e_r": -0.7906114759858389,
+      "e_r_interval": [
+        -1.0323447741631746,
+        -0.5488781778085032
+      ],
+      "profit_factor": 0.0,
+      "profit_factor_note": null,
+      "max_drawdown": 2.3718344279575163,
+      "roi": -0.023548526699906702,
+      "roi_interval": [
+        -0.05041564928476006,
+        -0.003093307794859612
+      ],
+      "max_drawdown_equity": 0.023548526699906702,
+      "max_open": 1,
+      "mean_open": 0.008517495395948435,
+      "r_quantiles": {
+        "p10": -1.0332191341050943,
+        "p25": -1.0312518242357749,
+        "p50": -1.0279729744535762,
+        "p75": -0.6686518769697714,
+        "p90": -0.45305921847948855
+      },
+      "r_histogram": {
+        "<=-1": 2,
+        "(-1,0]": 1,
+        "(0,1]": 0,
+        "(1,2]": 0,
+        "(2,5]": 0,
+        "(5,10]": 0,
+        ">10": 0
+      },
+      "hold_hours_mean": 12.333333333333334,
+      "hold_hours_median": 13.5,
+      "funnel": {
+        "arms": 4,
+        "fills": 3,
+        "expired": 1,
+        "cancelled": 0,
+        "entries": 3,
+        "dropped_stop_wrong_side": 0,
+        "dropped_stop_too_close_atr": 0,
+        "dropped_costs_over_cap": 0,
+        "dropped_no_wave_context": 0,
+        "skipped_opposite": 0,
+        "skipped_max_open": 0,
+        "skipped_overlap": 0,
+        "skipped_total": 0,
+        "trades": 3
+      },
+      "min_distance_drop_rate": 0.0,
+      "censored_trades": [],
+      "objective": -0.05041564928476006,
+      "objective_feasible": true,
+      "pnl_contribution": -0.023272340101622564
+    },
+    "SOLUSDT": {
+      "n_closed": 0,
+      "n_censored": 0,
+      "n_trades": 0,
+      "weeks": 25.857142857142858,
+      "trades_per_week": 0.0,
+      "p_t1": {
+        "k": 0,
+        "n": 0,
+        "p": null,
+        "interval": null
+      },
+      "p_t2": {
+        "k": 0,
+        "n": 0,
+        "p": null,
+        "interval": null
+      },
+      "p_stop_before_t1": {
+        "k": 0,
+        "n": 0,
+        "p": null,
+        "interval": null
+      },
+      "e_r": null,
+      "e_r_interval": null,
+      "profit_factor": null,
+      "profit_factor_note": "no winning or losing outcome",
+      "max_drawdown": 0.0,
+      "roi": 0.0,
+      "roi_interval": [
+        0.0,
+        0.0
+      ],
+      "max_drawdown_equity": 0.0,
+      "max_open": 0,
+      "mean_open": 0.0,
+      "r_quantiles": {
+        "p10": null,
+        "p25": null,
+        "p50": null,
+        "p75": null,
+        "p90": null
+      },
+      "r_histogram": {
+        "<=-1": 0,
+        "(-1,0]": 0,
+        "(0,1]": 0,
+        "(1,2]": 0,
+        "(2,5]": 0,
+        "(5,10]": 0,
+        ">10": 0
+      },
+      "hold_hours_mean": null,
+      "hold_hours_median": null,
+      "funnel": {
+        "arms": 0,
+        "fills": 0,
+        "expired": 0,
+        "cancelled": 0,
+        "entries": 0,
+        "dropped_stop_wrong_side": 0,
+        "dropped_stop_too_close_atr": 0,
+        "dropped_costs_over_cap": 0,
+        "dropped_no_wave_context": 0,
+        "skipped_opposite": 0,
+        "skipped_max_open": 0,
+        "skipped_overlap": 0,
+        "skipped_total": 0,
+        "trades": 0
+      },
+      "min_distance_drop_rate": null,
+      "censored_trades": [],
+      "objective": 0.0,
+      "objective_feasible": true,
+      "pnl_contribution": 0.0
+    },
+    "BNBUSDT": {
+      "n_closed": 0,
+      "n_censored": 0,
+      "n_trades": 0,
+      "weeks": 25.857142857142858,
+      "trades_per_week": 0.0,
+      "p_t1": {
+        "k": 0,
+        "n": 0,
+        "p": null,
+        "interval": null
+      },
+      "p_t2": {
+        "k": 0,
+        "n": 0,
+        "p": null,
+        "interval": null
+      },
+      "p_stop_before_t1": {
+        "k": 0,
+        "n": 0,
+        "p": null,
+        "interval": null
+      },
+      "e_r": null,
+      "e_r_interval": null,
+      "profit_factor": null,
+      "profit_factor_note": "no winning or losing outcome",
+      "max_drawdown": 0.0,
+      "roi": 0.0,
+      "roi_interval": [
+        0.0,
+        0.0
+      ],
+      "max_drawdown_equity": 0.0,
+      "max_open": 0,
+      "mean_open": 0.0,
+      "r_quantiles": {
+        "p10": null,
+        "p25": null,
+        "p50": null,
+        "p75": null,
+        "p90": null
+      },
+      "r_histogram": {
+        "<=-1": 0,
+        "(-1,0]": 0,
+        "(0,1]": 0,
+        "(1,2]": 0,
+        "(2,5]": 0,
+        "(5,10]": 0,
+        ">10": 0
+      },
+      "hold_hours_mean": null,
+      "hold_hours_median": null,
+      "funnel": {
+        "arms": 0,
+        "fills": 0,
+        "expired": 0,
+        "cancelled": 0,
+        "entries": 0,
+        "dropped_stop_wrong_side": 0,
+        "dropped_stop_too_close_atr": 0,
+        "dropped_costs_over_cap": 0,
+        "dropped_no_wave_context": 0,
+        "skipped_opposite": 0,
+        "skipped_max_open": 0,
+        "skipped_overlap": 0,
+        "skipped_total": 0,
+        "trades": 0
+      },
+      "min_distance_drop_rate": null,
+      "censored_trades": [],
+      "objective": 0.0,
+      "objective_feasible": true,
+      "pnl_contribution": 0.0
+    },
+    "XRPUSDT": {
+      "n_closed": 1,
+      "n_censored": 0,
+      "n_trades": 1,
+      "weeks": 25.857142857142858,
+      "trades_per_week": 0.03867403314917127,
+      "p_t1": {
+        "k": 0,
+        "n": 1,
+        "p": 0.0,
+        "interval": [
+          0.0,
+          0.7301340512159457
+        ]
+      },
+      "p_t2": {
+        "k": 0,
+        "n": 1,
+        "p": 0.0,
+        "interval": [
+          0.0,
+          0.7301340512159457
+        ]
+      },
+      "p_stop_before_t1": {
+        "k": 0,
+        "n": 1,
+        "p": 0.0,
+        "interval": [
+          0.0,
+          0.7301340512159457
+        ]
+      },
+      "e_r": 0.02396132044373804,
+      "e_r_interval": null,
+      "profit_factor": null,
+      "profit_factor_note": "no losing outcome: undefined",
+      "max_drawdown": 0.0,
+      "roi": 0.0002396132044373278,
+      "roi_interval": [
+        0.0,
+        0.0007190118705324711
+      ],
+      "max_drawdown_equity": 0.0,
+      "max_open": 1,
+      "mean_open": 0.0006906077348066298,
+      "r_quantiles": {
+        "p10": 0.02396132044373804,
+        "p25": 0.02396132044373804,
+        "p50": 0.02396132044373804,
+        "p75": 0.02396132044373804,
+        "p90": 0.02396132044373804
+      },
+      "r_histogram": {
+        "<=-1": 0,
+        "(-1,0]": 0,
+        "(0,1]": 1,
+        "(1,2]": 0,
+        "(2,5]": 0,
+        "(5,10]": 0,
+        ">10": 0
+      },
+      "hold_hours_mean": 3.0,
+      "hold_hours_median": 3.0,
+      "funnel": {
+        "arms": 1,
+        "fills": 1,
+        "expired": 0,
+        "cancelled": 0,
+        "entries": 1,
+        "dropped_stop_wrong_side": 0,
+        "dropped_stop_too_close_atr": 0,
+        "dropped_costs_over_cap": 0,
+        "dropped_no_wave_context": 0,
+        "skipped_opposite": 0,
+        "skipped_max_open": 0,
+        "skipped_overlap": 0,
+        "skipped_total": 0,
+        "trades": 1
+      },
+      "min_distance_drop_rate": 0.0,
+      "censored_trades": [],
+      "objective": 0.0,
+      "objective_feasible": true,
+      "pnl_contribution": 0.00023455870079510605
+    },
+    "DOGEUSDT": {
+      "n_closed": 0,
+      "n_censored": 0,
+      "n_trades": 0,
+      "weeks": 25.857142857142858,
+      "trades_per_week": 0.0,
+      "p_t1": {
+        "k": 0,
+        "n": 0,
+        "p": null,
+        "interval": null
+      },
+      "p_t2": {
+        "k": 0,
+        "n": 0,
+        "p": null,
+        "interval": null
+      },
+      "p_stop_before_t1": {
+        "k": 0,
+        "n": 0,
+        "p": null,
+        "interval": null
+      },
+      "e_r": null,
+      "e_r_interval": null,
+      "profit_factor": null,
+      "profit_factor_note": "no winning or losing outcome",
+      "max_drawdown": 0.0,
+      "roi": 0.0,
+      "roi_interval": [
+        0.0,
+        0.0
+      ],
+      "max_drawdown_equity": 0.0,
+      "max_open": 0,
+      "mean_open": 0.0,
+      "r_quantiles": {
+        "p10": null,
+        "p25": null,
+        "p50": null,
+        "p75": null,
+        "p90": null
+      },
+      "r_histogram": {
+        "<=-1": 0,
+        "(-1,0]": 0,
+        "(0,1]": 0,
+        "(1,2]": 0,
+        "(2,5]": 0,
+        "(5,10]": 0,
+        ">10": 0
+      },
+      "hold_hours_mean": null,
+      "hold_hours_median": null,
+      "funnel": {
+        "arms": 0,
+        "fills": 0,
+        "expired": 0,
+        "cancelled": 0,
+        "entries": 0,
+        "dropped_stop_wrong_side": 0,
+        "dropped_stop_too_close_atr": 0,
+        "dropped_costs_over_cap": 0,
+        "dropped_no_wave_context": 0,
+        "skipped_opposite": 0,
+        "skipped_max_open": 0,
+        "skipped_overlap": 0,
+        "skipped_total": 0,
+        "trades": 0
+      },
+      "min_distance_drop_rate": null,
+      "censored_trades": [],
+      "objective": 0.0,
+      "objective_feasible": true,
+      "pnl_contribution": 0.0
+    },
+    "ADAUSDT": {
+      "n_closed": 0,
+      "n_censored": 0,
+      "n_trades": 0,
+      "weeks": 25.857142857142858,
+      "trades_per_week": 0.0,
+      "p_t1": {
+        "k": 0,
+        "n": 0,
+        "p": null,
+        "interval": null
+      },
+      "p_t2": {
+        "k": 0,
+        "n": 0,
+        "p": null,
+        "interval": null
+      },
+      "p_stop_before_t1": {
+        "k": 0,
+        "n": 0,
+        "p": null,
+        "interval": null
+      },
+      "e_r": null,
+      "e_r_interval": null,
+      "profit_factor": null,
+      "profit_factor_note": "no winning or losing outcome",
+      "max_drawdown": 0.0,
+      "roi": 0.0,
+      "roi_interval": [
+        0.0,
+        0.0
+      ],
+      "max_drawdown_equity": 0.0,
+      "max_open": 0,
+      "mean_open": 0.0,
+      "r_quantiles": {
+        "p10": null,
+        "p25": null,
+        "p50": null,
+        "p75": null,
+        "p90": null
+      },
+      "r_histogram": {
+        "<=-1": 0,
+        "(-1,0]": 0,
+        "(0,1]": 0,
+        "(1,2]": 0,
+        "(2,5]": 0,
+        "(5,10]": 0,
+        ">10": 0
+      },
+      "hold_hours_mean": null,
+      "hold_hours_median": null,
+      "funnel": {
+        "arms": 0,
+        "fills": 0,
+        "expired": 0,
+        "cancelled": 0,
+        "entries": 0,
+        "dropped_stop_wrong_side": 0,
+        "dropped_stop_too_close_atr": 0,
+        "dropped_costs_over_cap": 0,
+        "dropped_no_wave_context": 0,
+        "skipped_opposite": 0,
+        "skipped_max_open": 0,
+        "skipped_overlap": 0,
+        "skipped_total": 0,
+        "trades": 0
+      },
+      "min_distance_drop_rate": null,
+      "censored_trades": [],
+      "objective": 0.0,
+      "objective_feasible": true,
+      "pnl_contribution": 0.0
+    },
+    "AVAXUSDT": {
+      "n_closed": 3,
+      "n_censored": 0,
+      "n_trades": 3,
+      "weeks": 25.857142857142858,
+      "trades_per_week": 0.11602209944751381,
+      "p_t1": {
+        "k": 0,
+        "n": 3,
+        "p": 0.0,
+        "interval": [
+          0.0,
+          0.47419557415751257
+        ]
+      },
+      "p_t2": {
+        "k": 0,
+        "n": 3,
+        "p": 0.0,
+        "interval": [
+          0.0,
+          0.47419557415751257
+        ]
+      },
+      "p_stop_before_t1": {
+        "k": 2,
+        "n": 3,
+        "p": 0.6666666666666666,
+        "interval": [
+          0.25353386828122426,
+          0.9217342736662715
+        ]
+      },
+      "e_r": -0.7917631648601846,
+      "e_r_interval": [
+        -1.0372599130915872,
+        -0.5462664166287823
+      ],
+      "profit_factor": 0.0,
+      "profit_factor_note": null,
+      "max_drawdown": 2.375289494580554,
+      "roi": -0.023583005456964456,
+      "roi_interval": [
+        -0.050677127747073225,
+        -0.0030392509071202056
+      ],
+      "max_drawdown_equity": 0.023583005456964456,
+      "max_open": 1,
+      "mean_open": 0.02175414364640884,
+      "r_quantiles": {
+        "p10": -1.0385220820174415,
+        "p25": -1.035682201934269,
+        "p50": -1.030949068462315,
+        "p75": -0.6674370795871654,
+        "p90": -0.44932988626207565
+      },
+      "r_histogram": {
+        "<=-1": 2,
+        "(-1,0]": 1,
+        "(0,1]": 0,
+        "(1,2]": 0,
+        "(2,5]": 0,
+        "(5,10]": 0,
+        ">10": 0
+      },
+      "hold_hours_mean": 31.5,
+      "hold_hours_median": 25.0,
+      "funnel": {
+        "arms": 3,
+        "fills": 3,
+        "expired": 0,
+        "cancelled": 0,
+        "entries": 3,
+        "dropped_stop_wrong_side": 0,
+        "dropped_stop_too_close_atr": 0,
+        "dropped_costs_over_cap": 0,
+        "dropped_no_wave_context": 0,
+        "skipped_opposite": 0,
+        "skipped_max_open": 0,
+        "skipped_overlap": 0,
+        "skipped_total": 0,
+        "trades": 3
+      },
+      "min_distance_drop_rate": 0.0,
+      "censored_trades": [],
+      "objective": -0.050677127747073225,
+      "objective_feasible": true,
+      "pnl_contribution": -0.022985373039602807
+    },
+    "LINKUSDT": {
+      "n_closed": 3,
+      "n_censored": 0,
+      "n_trades": 3,
+      "weeks": 25.857142857142858,
+      "trades_per_week": 0.11602209944751381,
+      "p_t1": {
+        "k": 1,
+        "n": 3,
+        "p": 0.3333333333333333,
+        "interval": [
+          0.07826572633372847,
+          0.7464661317187757
+        ]
+      },
+      "p_t2": {
+        "k": 0,
+        "n": 3,
+        "p": 0.0,
+        "interval": [
+          0.0,
+          0.47419557415751257
+        ]
+      },
+      "p_stop_before_t1": {
+        "k": 0,
+        "n": 3,
+        "p": 0.0,
+        "interval": [
+          0.0,
+          0.47419557415751257
+        ]
+      },
+      "e_r": 0.18545285333625164,
+      "e_r_interval": [
+        -0.1728998683518318,
+        0.5438055750243351
+      ],
+      "profit_factor": 3.056853615806206,
+      "profit_factor_note": null,
+      "max_drawdown": 0.27049010961856135,
+      "roi": 0.005543007939522671,
+      "roi_interval": [
+        -0.00540248570243107,
+        0.02156104530666836
+      ],
+      "max_drawdown_equity": 0.0027049010961857096,
+      "max_open": 1,
+      "mean_open": 0.008057090239410682,
+      "r_quantiles": {
+        "p10": -0.21193596485852362,
+        "p25": -0.124104747718467,
+        "p50": 0.02228061418162732,
+        "p75": 0.41342433481365815,
+        "p90": 0.6481105671928766
+      },
+      "r_histogram": {
+        "<=-1": 0,
+        "(-1,0]": 1,
+        "(0,1]": 2,
+        "(1,2]": 0,
+        "(2,5]": 0,
+        "(5,10]": 0,
+        ">10": 0
+      },
+      "hold_hours_mean": 11.666666666666666,
+      "hold_hours_median": 4.0,
+      "funnel": {
+        "arms": 4,
+        "fills": 3,
+        "expired": 1,
+        "cancelled": 0,
+        "entries": 3,
+        "dropped_stop_wrong_side": 0,
+        "dropped_stop_too_close_atr": 0,
+        "dropped_costs_over_cap": 0,
+        "dropped_no_wave_context": 0,
+        "skipped_opposite": 0,
+        "skipped_max_open": 0,
+        "skipped_overlap": 0,
+        "skipped_total": 0,
+        "trades": 3
+      },
+      "min_distance_drop_rate": 0.0,
+      "censored_trades": [],
+      "objective": -0.00540248570243107,
+      "objective_feasible": true,
+      "pnl_contribution": 0.005370927997515517
+    },
+    "TRXUSDT": {
+      "n_closed": 1,
+      "n_censored": 0,
+      "n_trades": 1,
+      "weeks": 25.857142857142858,
+      "trades_per_week": 0.03867403314917127,
+      "p_t1": {
+        "k": 0,
+        "n": 1,
+        "p": 0.0,
+        "interval": [
+          0.0,
+          0.7301340512159457
+        ]
+      },
+      "p_t2": {
+        "k": 0,
+        "n": 1,
+        "p": 0.0,
+        "interval": [
+          0.0,
+          0.7301340512159457
+        ]
+      },
+      "p_stop_before_t1": {
+        "k": 1,
+        "n": 1,
+        "p": 1.0,
+        "interval": [
+          0.2698659487840544,
+          1.0
+        ]
+      },
+      "e_r": -1.0861487318065313,
+      "e_r_interval": null,
+      "profit_factor": 0.0,
+      "profit_factor_note": null,
+      "max_drawdown": 1.0861487318065313,
+      "roi": -0.010861487318065355,
+      "roi_interval": [
+        -0.03223182758428367,
+        0.0
+      ],
+      "max_drawdown_equity": 0.010861487318065355,
+      "max_open": 1,
+      "mean_open": 0.005639963167587477,
+      "r_quantiles": {
+        "p10": -1.0861487318065313,
+        "p25": -1.0861487318065313,
+        "p50": -1.0861487318065313,
+        "p75": -1.0861487318065313,
+        "p90": -1.0861487318065313
+      },
+      "r_histogram": {
+        "<=-1": 1,
+        "(-1,0]": 0,
+        "(0,1]": 0,
+        "(1,2]": 0,
+        "(2,5]": 0,
+        "(5,10]": 0,
+        ">10": 0
+      },
+      "hold_hours_mean": 24.5,
+      "hold_hours_median": 24.5,
+      "funnel": {
+        "arms": 1,
+        "fills": 1,
+        "expired": 0,
+        "cancelled": 0,
+        "entries": 1,
+        "dropped_stop_wrong_side": 0,
+        "dropped_stop_too_close_atr": 0,
+        "dropped_costs_over_cap": 0,
+        "dropped_no_wave_context": 0,
+        "skipped_opposite": 0,
+        "skipped_max_open": 0,
+        "skipped_overlap": 0,
+        "skipped_total": 0,
+        "trades": 1
+      },
+      "min_distance_drop_rate": 0.0,
+      "censored_trades": [],
+      "objective": -0.03223182758428367,
+      "objective_feasible": true,
+      "pnl_contribution": -0.010861487318065313
+    }
+  },
+  "subwindows": {
+    "jan_apr": {
+      "n_closed": 7,
+      "n_censored": 0,
+      "n_trades": 7,
+      "weeks": 17.142857142857142,
+      "trades_per_week": 0.4083333333333333,
+      "p_t1": {
+        "k": 1,
+        "n": 7,
+        "p": 0.14285714285714285,
+        "interval": [
+          0.032543802054786686,
+          0.45228669469702903
+        ]
+      },
+      "p_t2": {
+        "k": 0,
+        "n": 7,
+        "p": 0.0,
+        "interval": [
+          2.7755575615628914e-17,
+          0.27876269545254195
+        ]
+      },
+      "p_stop_before_t1": {
+        "k": 3,
+        "n": 7,
+        "p": 0.42857142857142855,
+        "interval": [
+          0.18644319036395618,
+          0.710522908986407
+        ]
+      },
+      "e_r": -0.4135054578170331,
+      "e_r_interval": [
+        -0.8001305163084887,
+        0.002120584386544435
+      ],
+      "profit_factor": 0.2225394403810356,
+      "profit_factor_note": null,
+      "max_drawdown": 3.124691059834343,
+      "roi": -0.028739598846169168,
+      "roi_interval": [
+        -0.061442230151796284,
+        0.00025908418448875156
+      ],
+      "max_drawdown_equity": 0.030925165858541548,
+      "max_open": 2,
+      "mean_open": 0.03333333333333333,
+      "r_quantiles": {
+        "p10": -1.0551778971333967,
+        "p25": -1.0312518242357749,
+        "p50": -0.30392509071201584,
+        "p75": -0.12326439458741166,
+        "p90": 0.33620401444451875
+      },
+      "r_histogram": {
+        "<=-1": 3,
+        "(-1,0]": 2,
+        "(0,1]": 2,
+        "(1,2]": 0,
+        "(2,5]": 0,
+        "(5,10]": 0,
+        ">10": 0
+      },
+      "hold_hours_mean": 13.714285714285714,
+      "hold_hours_median": 13.5,
+      "funnel": {
+        "arms": 8,
+        "fills": 7,
+        "expired": 1,
+        "cancelled": 0,
+        "entries": 7,
+        "dropped_stop_wrong_side": 0,
+        "dropped_stop_too_close_atr": 0,
+        "dropped_costs_over_cap": 0,
+        "dropped_no_wave_context": 0,
+        "skipped_opposite": 0,
+        "skipped_max_open": 0,
+        "skipped_overlap": 0,
+        "skipped_total": 0,
+        "trades": 7
+      },
+      "min_distance_drop_rate": 0.0,
+      "censored_trades": [],
+      "objective": -0.061442230151796284,
+      "objective_feasible": true
+    },
+    "may_jun": {
+      "n_closed": 5,
+      "n_censored": 0,
+      "n_trades": 5,
+      "weeks": 8.714285714285714,
+      "trades_per_week": 0.5737704918032788,
+      "p_t1": {
+        "k": 0,
+        "n": 5,
+        "p": 0.0,
+        "interval": [
+          0.0,
+          0.35111650076510104
+        ]
+      },
+      "p_t2": {
+        "k": 0,
+        "n": 5,
+        "p": 0.0,
+        "interval": [
+          0.0,
+          0.35111650076510104
+        ]
+      },
+      "p_stop_before_t1": {
+        "k": 3,
+        "n": 5,
+        "p": 0.6,
+        "interval": [
+          0.2724831718661929,
+          0.857293527980787
+        ]
+      },
+      "e_r": -0.6808551343187192,
+      "e_r_interval": [
+        -1.0385363346882923,
+        -0.3239922866058794
+      ],
+      "profit_factor": 0.006502334216461458,
+      "profit_factor_note": null,
+      "max_drawdown": 3.426556285775223,
+      "roi": -0.03366137856082674,
+      "roi_interval": [
+        -0.059730040803169904,
+        -0.0100889815606503
+      ],
+      "max_drawdown_equity": 0.03387663677990445,
+      "max_open": 2,
+      "mean_open": 0.06967213114754098,
+      "r_quantiles": {
+        "p10": -1.0436827956149204,
+        "p25": -1.040415335406223,
+        "p50": -1.030949068462315,
+        "p75": -0.3093307794859667,
+        "p90": -0.11036394328541024
+      },
+      "r_histogram": {
+        "<=-1": 3,
+        "(-1,0]": 1,
+        "(0,1]": 1,
+        "(1,2]": 0,
+        "(2,5]": 0,
+        "(5,10]": 0,
+        ">10": 0
+      },
+      "hold_hours_mean": 20.4,
+      "hold_hours_median": 4.0,
+      "funnel": {
+        "arms": 6,
+        "fills": 5,
+        "expired": 1,
+        "cancelled": 0,
+        "entries": 5,
+        "dropped_stop_wrong_side": 0,
+        "dropped_stop_too_close_atr": 0,
+        "dropped_costs_over_cap": 0,
+        "dropped_no_wave_context": 0,
+        "skipped_opposite": 0,
+        "skipped_max_open": 0,
+        "skipped_overlap": 0,
+        "skipped_total": 0,
+        "trades": 5
+      },
+      "min_distance_drop_rate": 0.0,
+      "censored_trades": [],
+      "objective": -0.059730040803169904,
+      "objective_feasible": true
+    }
+  },
+  "baselines": {
+    "no_trade": {
+      "name": "no_trade",
+      "e_r": 0.0,
+      "roi": 0.0,
+      "max_drawdown_equity": 0.0,
+      "n_closed": 0,
+      "n_censored": 0,
+      "trades_per_week": 0.0
+    },
+    "random_tide": {
+      "name": "random_tide",
+      "n_seeds": 20,
+      "per_seed_e_r": [
+        -0.21575652395993725,
+        -0.7488044549898852,
+        0.21783114136744197,
+        -0.27787020374140553,
+        0.08720310948174155,
+        -0.11340239728970486,
+        -0.24541319435606312,
+        -0.26160109653623365,
+        -0.2671521565076968,
+        -0.20061696294847697,
+        -0.25883299817606337,
+        0.4575315722859419,
+        0.35425948355995057,
+        -0.17993251460760992,
+        0.31811224676293,
+        0.03341271004996624,
+        -0.21884641219107193,
+        -0.2288344109713738,
+        0.44919894630973284,
+        0.4055063583467848
+      ],
+      "per_seed_roi": [
+        -0.023960069839715548,
+        -0.07953147142871164,
+        0.02337152596293235,
+        -0.03327530164075476,
+        0.009785504090630281,
+        -0.013935260026866625,
+        -0.02960327724709566,
+        -0.03148381063449279,
+        -0.02935025564448579,
+        -0.02425701489267129,
+        -0.03105622105790129,
+        0.05578665301427055,
+        0.04281518275378504,
+        -0.012274573294957292,
+        0.037934997590637565,
+        0.0035026928971730875,
+        -0.026434484600809327,
+        -0.027499506818216446,
+        0.054424328713999603,
+        0.0478003047296518
+      ],
+      "per_seed_trade_ids": [
+        [
+          [
+            "AVAXUSDT",
+            "2026-03-27T13:00:00+00:00",
+            -1,
+            8522,
+            8749
+          ],
+          [
+            "AVAXUSDT",
+            "2026-04-29T18:30:00+00:00",
+            -1,
+            10117,
+            10395
+          ],
+          [
+            "AVAXUSDT",
+            "2026-05-10T21:00:00+00:00",
+            1,
+            10650,
+            10731
+          ],
+          [
+            "BTCUSDT",
+            "2026-05-04T13:00:00+00:00",
+            1,
+            10346,
+            10493
+          ],
+          [
+            "ETHUSDT",
+            "2026-01-31T09:00:00+00:00",
+            -1,
+            5874,
+            6178
+          ],
+          [
+            "ETHUSDT",
+            "2026-03-24T09:30:00+00:00",
+            1,
+            8371,
+            8496
+          ],
+          [
+            "ETHUSDT",
+            "2026-04-20T15:00:00+00:00",
+            -1,
+            9678,
+            9749
+          ],
+          [
+            "LINKUSDT",
+            "2026-02-23T14:30:00+00:00",
+            -1,
+            6989,
+            7082
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-06T04:00:00+00:00",
+            1,
+            7496,
+            7516
+          ],
+          [
+            "LINKUSDT",
+            "2026-06-18T05:00:00+00:00",
+            -1,
+            12490,
+            13042
+          ],
+          [
+            "TRXUSDT",
+            "2026-06-30T06:30:00+00:00",
+            -1,
+            13069,
+            13103
+          ],
+          [
+            "XRPUSDT",
+            "2026-01-20T04:30:00+00:00",
+            -1,
+            5337,
+            5415
+          ]
+        ],
+        [
+          [
+            "AVAXUSDT",
+            "2026-01-01T05:30:00+00:00",
+            -1,
+            4427,
+            4452
+          ],
+          [
+            "AVAXUSDT",
+            "2026-03-30T23:30:00+00:00",
+            -1,
+            8687,
+            8748
+          ],
+          [
+            "AVAXUSDT",
+            "2026-06-06T14:30:00+00:00",
+            -1,
+            11933,
+            12590
+          ],
+          [
+            "BTCUSDT",
+            "2026-05-05T16:30:00+00:00",
+            1,
+            10401,
+            10783
+          ],
+          [
+            "ETHUSDT",
+            "2026-02-24T14:00:00+00:00",
+            -1,
+            7036,
+            7081
+          ],
+          [
+            "ETHUSDT",
+            "2026-03-24T01:30:00+00:00",
+            1,
+            8355,
+            8496
+          ],
+          [
+            "ETHUSDT",
+            "2026-06-22T07:00:00+00:00",
+            -1,
+            12686,
+            12695
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-06T04:00:00+00:00",
+            1,
+            7496,
+            7516
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-14T04:30:00+00:00",
+            1,
+            7881,
+            7891
+          ],
+          [
+            "LINKUSDT",
+            "2026-04-12T23:00:00+00:00",
+            1,
+            9310,
+            9312
+          ],
+          [
+            "TRXUSDT",
+            "2026-05-26T23:30:00+00:00",
+            1,
+            11423,
+            11460
+          ],
+          [
+            "XRPUSDT",
+            "2026-06-24T17:30:00+00:00",
+            -1,
+            12803,
+            13103
+          ]
+        ],
+        [
+          [
+            "AVAXUSDT",
+            "2026-01-26T20:00:00+00:00",
+            -1,
+            5656,
+            5705
+          ],
+          [
+            "AVAXUSDT",
+            "2026-01-30T05:00:00+00:00",
+            -1,
+            5818,
+            5904
+          ],
+          [
+            "AVAXUSDT",
+            "2026-06-27T06:30:00+00:00",
+            1,
+            12925,
+            13103
+          ],
+          [
+            "BTCUSDT",
+            "2026-04-06T14:30:00+00:00",
+            1,
+            9005,
+            9289
+          ],
+          [
+            "ETHUSDT",
+            "2026-01-26T20:30:00+00:00",
+            -1,
+            5657,
+            5696
+          ],
+          [
+            "ETHUSDT",
+            "2026-01-30T17:00:00+00:00",
+            -1,
+            5842,
+            6178
+          ],
+          [
+            "ETHUSDT",
+            "2026-03-27T20:30:00+00:00",
+            -1,
+            8537,
+            8721
+          ],
+          [
+            "LINKUSDT",
+            "2026-01-02T16:30:00+00:00",
+            1,
+            4497,
+            4733
+          ],
+          [
+            "LINKUSDT",
+            "2026-02-20T00:30:00+00:00",
+            -1,
+            6817,
+            6846
+          ],
+          [
+            "LINKUSDT",
+            "2026-02-23T00:30:00+00:00",
+            -1,
+            6961,
+            7058
+          ],
+          [
+            "TRXUSDT",
+            "2026-02-25T17:30:00+00:00",
+            -1,
+            7091,
+            7251
+          ],
+          [
+            "XRPUSDT",
+            "2026-03-12T14:00:00+00:00",
+            1,
+            7804,
+            7904
+          ]
+        ],
+        [
+          [
+            "AVAXUSDT",
+            "2026-02-15T03:30:00+00:00",
+            1,
+            6583,
+            6701
+          ],
+          [
+            "AVAXUSDT",
+            "2026-03-05T02:30:00+00:00",
+            1,
+            7445,
+            7523
+          ],
+          [
+            "AVAXUSDT",
+            "2026-03-07T19:30:00+00:00",
+            -1,
+            7575,
+            7643
+          ],
+          [
+            "BTCUSDT",
+            "2026-04-15T01:30:00+00:00",
+            1,
+            9411,
+            9483
+          ],
+          [
+            "ETHUSDT",
+            "2026-03-10T01:30:00+00:00",
+            -1,
+            7683,
+            7709
+          ],
+          [
+            "ETHUSDT",
+            "2026-03-23T01:30:00+00:00",
+            -1,
+            8307,
+            8326
+          ],
+          [
+            "ETHUSDT",
+            "2026-04-09T19:30:00+00:00",
+            1,
+            9159,
+            9267
+          ],
+          [
+            "LINKUSDT",
+            "2026-01-24T01:00:00+00:00",
+            -1,
+            5522,
+            5632
+          ],
+          [
+            "LINKUSDT",
+            "2026-02-26T05:00:00+00:00",
+            1,
+            7114,
+            7200
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-19T09:00:00+00:00",
+            -1,
+            8130,
+            8352
+          ],
+          [
+            "TRXUSDT",
+            "2026-02-20T10:00:00+00:00",
+            1,
+            6836,
+            6985
+          ],
+          [
+            "XRPUSDT",
+            "2026-06-23T01:30:00+00:00",
+            -1,
+            12723,
+            12942
+          ]
+        ],
+        [
+          [
+            "AVAXUSDT",
+            "2026-01-14T07:00:00+00:00",
+            1,
+            5054,
+            5136
+          ],
+          [
+            "AVAXUSDT",
+            "2026-01-18T03:00:00+00:00",
+            -1,
+            5238,
+            5646
+          ],
+          [
+            "AVAXUSDT",
+            "2026-05-23T05:00:00+00:00",
+            -1,
+            11242,
+            12254
+          ],
+          [
+            "BTCUSDT",
+            "2026-03-08T06:00:00+00:00",
+            -1,
+            7596,
+            7659
+          ],
+          [
+            "ETHUSDT",
+            "2026-01-10T12:00:00+00:00",
+            -1,
+            4872,
+            4950
+          ],
+          [
+            "ETHUSDT",
+            "2026-03-13T22:00:00+00:00",
+            1,
+            7868,
+            8089
+          ],
+          [
+            "ETHUSDT",
+            "2026-05-16T06:00:00+00:00",
+            -1,
+            10908,
+            11273
+          ],
+          [
+            "LINKUSDT",
+            "2026-02-19T13:00:00+00:00",
+            -1,
+            6794,
+            6860
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-03T02:00:00+00:00",
+            1,
+            7348,
+            7392
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-17T05:30:00+00:00",
+            1,
+            8027,
+            8089
+          ],
+          [
+            "TRXUSDT",
+            "2026-05-26T06:00:00+00:00",
+            1,
+            11388,
+            11484
+          ],
+          [
+            "XRPUSDT",
+            "2026-03-29T03:30:00+00:00",
+            -1,
+            8599,
+            8640
+          ]
+        ],
+        [
+          [
+            "AVAXUSDT",
+            "2026-01-06T04:00:00+00:00",
+            1,
+            4664,
+            4766
+          ],
+          [
+            "AVAXUSDT",
+            "2026-05-20T16:30:00+00:00",
+            -1,
+            11121,
+            11151
+          ],
+          [
+            "AVAXUSDT",
+            "2026-06-05T20:00:00+00:00",
+            -1,
+            11896,
+            12912
+          ],
+          [
+            "BTCUSDT",
+            "2026-04-09T08:00:00+00:00",
+            1,
+            9136,
+            9289
+          ],
+          [
+            "ETHUSDT",
+            "2026-03-04T05:00:00+00:00",
+            -1,
+            7402,
+            7409
+          ],
+          [
+            "ETHUSDT",
+            "2026-04-10T16:00:00+00:00",
+            1,
+            9200,
+            9267
+          ],
+          [
+            "ETHUSDT",
+            "2026-04-30T00:30:00+00:00",
+            -1,
+            10129,
+            10272
+          ],
+          [
+            "LINKUSDT",
+            "2026-02-26T23:00:00+00:00",
+            1,
+            7150,
+            7179
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-10T13:30:00+00:00",
+            1,
+            7707,
+            7868
+          ],
+          [
+            "LINKUSDT",
+            "2026-06-03T20:00:00+00:00",
+            -1,
+            11800,
+            11969
+          ],
+          [
+            "TRXUSDT",
+            "2026-06-22T19:00:00+00:00",
+            1,
+            12710,
+            12802
+          ],
+          [
+            "XRPUSDT",
+            "2026-01-03T18:30:00+00:00",
+            1,
+            4549,
+            4689
+          ]
+        ],
+        [
+          [
+            "AVAXUSDT",
+            "2026-05-02T14:30:00+00:00",
+            -1,
+            10253,
+            10326
+          ],
+          [
+            "AVAXUSDT",
+            "2026-05-11T06:30:00+00:00",
+            1,
+            10669,
+            10731
+          ],
+          [
+            "AVAXUSDT",
+            "2026-06-04T06:30:00+00:00",
+            -1,
+            11821,
+            12254
+          ],
+          [
+            "BTCUSDT",
+            "2026-01-26T22:30:00+00:00",
+            -1,
+            5661,
+            5705
+          ],
+          [
+            "ETHUSDT",
+            "2026-01-03T04:00:00+00:00",
+            1,
+            4520,
+            4733
+          ],
+          [
+            "ETHUSDT",
+            "2026-04-23T14:30:00+00:00",
+            1,
+            9821,
+            9827
+          ],
+          [
+            "ETHUSDT",
+            "2026-06-18T04:00:00+00:00",
+            1,
+            12488,
+            12511
+          ],
+          [
+            "LINKUSDT",
+            "2026-02-23T11:30:00+00:00",
+            -1,
+            6983,
+            7083
+          ],
+          [
+            "LINKUSDT",
+            "2026-04-11T08:00:00+00:00",
+            1,
+            9232,
+            9267
+          ],
+          [
+            "LINKUSDT",
+            "2026-04-20T09:00:00+00:00",
+            -1,
+            9666,
+            9717
+          ],
+          [
+            "TRXUSDT",
+            "2026-05-06T19:00:00+00:00",
+            1,
+            10454,
+            10709
+          ],
+          [
+            "XRPUSDT",
+            "2026-05-16T15:30:00+00:00",
+            -1,
+            10927,
+            11273
+          ]
+        ],
+        [
+          [
+            "AVAXUSDT",
+            "2026-01-20T17:30:00+00:00",
+            -1,
+            5363,
+            5646
+          ],
+          [
+            "AVAXUSDT",
+            "2026-01-30T03:00:00+00:00",
+            -1,
+            5814,
+            5904
+          ],
+          [
+            "AVAXUSDT",
+            "2026-04-10T11:30:00+00:00",
+            1,
+            9191,
+            9295
+          ],
+          [
+            "BTCUSDT",
+            "2026-06-06T14:00:00+00:00",
+            -1,
+            11932,
+            11996
+          ],
+          [
+            "ETHUSDT",
+            "2026-01-03T02:00:00+00:00",
+            1,
+            4516,
+            4733
+          ],
+          [
+            "ETHUSDT",
+            "2026-03-08T21:30:00+00:00",
+            -1,
+            7627,
+            7638
+          ],
+          [
+            "ETHUSDT",
+            "2026-03-29T05:30:00+00:00",
+            -1,
+            8603,
+            8655
+          ],
+          [
+            "LINKUSDT",
+            "2026-02-23T21:00:00+00:00",
+            -1,
+            7002,
+            7081
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-20T01:30:00+00:00",
+            -1,
+            8163,
+            8326
+          ],
+          [
+            "LINKUSDT",
+            "2026-06-06T06:30:00+00:00",
+            -1,
+            11917,
+            11996
+          ],
+          [
+            "TRXUSDT",
+            "2026-03-05T23:30:00+00:00",
+            1,
+            7487,
+            7652
+          ],
+          [
+            "XRPUSDT",
+            "2026-06-16T08:30:00+00:00",
+            1,
+            12401,
+            12480
+          ]
+        ],
+        [
+          [
+            "AVAXUSDT",
+            "2026-01-01T09:30:00+00:00",
+            -1,
+            4435,
+            4452
+          ],
+          [
+            "AVAXUSDT",
+            "2026-03-27T23:30:00+00:00",
+            -1,
+            8543,
+            8748
+          ],
+          [
+            "AVAXUSDT",
+            "2026-06-06T07:00:00+00:00",
+            -1,
+            11918,
+            12912
+          ],
+          [
+            "BTCUSDT",
+            "2026-06-04T13:00:00+00:00",
+            -1,
+            11834,
+            11996
+          ],
+          [
+            "ETHUSDT",
+            "2026-01-10T22:30:00+00:00",
+            -1,
+            4893,
+            4925
+          ],
+          [
+            "ETHUSDT",
+            "2026-02-03T04:30:00+00:00",
+            -1,
+            6009,
+            6041
+          ],
+          [
+            "ETHUSDT",
+            "2026-06-26T12:30:00+00:00",
+            -1,
+            12889,
+            13103
+          ],
+          [
+            "LINKUSDT",
+            "2026-01-02T05:00:00+00:00",
+            1,
+            4474,
+            4733
+          ],
+          [
+            "LINKUSDT",
+            "2026-01-22T09:30:00+00:00",
+            -1,
+            5443,
+            5506
+          ],
+          [
+            "LINKUSDT",
+            "2026-06-06T15:00:00+00:00",
+            -1,
+            11934,
+            11969
+          ],
+          [
+            "TRXUSDT",
+            "2026-02-20T11:00:00+00:00",
+            1,
+            6838,
+            7008
+          ],
+          [
+            "XRPUSDT",
+            "2026-04-13T21:00:00+00:00",
+            -1,
+            9354,
+            9356
+          ]
+        ],
+        [
+          [
+            "AVAXUSDT",
+            "2026-01-01T14:00:00+00:00",
+            -1,
+            4444,
+            4452
+          ],
+          [
+            "AVAXUSDT",
+            "2026-05-11T21:30:00+00:00",
+            1,
+            10699,
+            10725
+          ],
+          [
+            "AVAXUSDT",
+            "2026-05-16T22:00:00+00:00",
+            -1,
+            10940,
+            11040
+          ],
+          [
+            "BTCUSDT",
+            "2026-01-14T22:30:00+00:00",
+            1,
+            5085,
+            5280
+          ],
+          [
+            "ETHUSDT",
+            "2026-02-05T11:00:00+00:00",
+            -1,
+            6118,
+            6178
+          ],
+          [
+            "ETHUSDT",
+            "2026-03-07T13:30:00+00:00",
+            -1,
+            7563,
+            7712
+          ],
+          [
+            "ETHUSDT",
+            "2026-03-20T00:30:00+00:00",
+            -1,
+            8161,
+            8326
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-03T22:30:00+00:00",
+            1,
+            7389,
+            7392
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-15T06:30:00+00:00",
+            1,
+            7933,
+            8087
+          ],
+          [
+            "LINKUSDT",
+            "2026-04-16T08:00:00+00:00",
+            1,
+            9472,
+            9578
+          ],
+          [
+            "TRXUSDT",
+            "2026-01-18T21:00:00+00:00",
+            1,
+            5274,
+            5308
+          ],
+          [
+            "XRPUSDT",
+            "2026-03-16T23:30:00+00:00",
+            1,
+            8015,
+            8256
+          ]
+        ],
+        [
+          [
+            "AVAXUSDT",
+            "2026-02-19T13:30:00+00:00",
+            -1,
+            6795,
+            6831
+          ],
+          [
+            "AVAXUSDT",
+            "2026-04-12T17:30:00+00:00",
+            1,
+            9299,
+            9312
+          ],
+          [
+            "AVAXUSDT",
+            "2026-05-01T10:00:00+00:00",
+            -1,
+            10196,
+            10325
+          ],
+          [
+            "BTCUSDT",
+            "2026-06-25T04:30:00+00:00",
+            -1,
+            12825,
+            12942
+          ],
+          [
+            "ETHUSDT",
+            "2026-04-03T21:00:00+00:00",
+            -1,
+            8874,
+            8974
+          ],
+          [
+            "ETHUSDT",
+            "2026-04-28T01:00:00+00:00",
+            -1,
+            10034,
+            10272
+          ],
+          [
+            "ETHUSDT",
+            "2026-05-20T01:30:00+00:00",
+            -1,
+            11091,
+            11273
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-02T06:00:00+00:00",
+            -1,
+            7308,
+            7328
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-14T17:30:00+00:00",
+            1,
+            7907,
+            8087
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-29T17:00:00+00:00",
+            -1,
+            8626,
+            8650
+          ],
+          [
+            "TRXUSDT",
+            "2026-04-19T20:30:00+00:00",
+            1,
+            9641,
+            9870
+          ],
+          [
+            "XRPUSDT",
+            "2026-04-28T21:00:00+00:00",
+            -1,
+            10074,
+            10129
+          ]
+        ],
+        [
+          [
+            "AVAXUSDT",
+            "2026-03-05T10:00:00+00:00",
+            1,
+            7460,
+            7516
+          ],
+          [
+            "AVAXUSDT",
+            "2026-04-14T10:00:00+00:00",
+            1,
+            9380,
+            9572
+          ],
+          [
+            "AVAXUSDT",
+            "2026-06-05T19:00:00+00:00",
+            -1,
+            11894,
+            12912
+          ],
+          [
+            "BTCUSDT",
+            "2026-03-07T16:00:00+00:00",
+            -1,
+            7568,
+            7643
+          ],
+          [
+            "ETHUSDT",
+            "2026-01-31T06:30:00+00:00",
+            -1,
+            5869,
+            6178
+          ],
+          [
+            "ETHUSDT",
+            "2026-02-05T22:30:00+00:00",
+            -1,
+            6141,
+            7104
+          ],
+          [
+            "ETHUSDT",
+            "2026-03-13T04:30:00+00:00",
+            1,
+            7833,
+            8089
+          ],
+          [
+            "LINKUSDT",
+            "2026-01-19T18:00:00+00:00",
+            -1,
+            5316,
+            5632
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-18T18:00:00+00:00",
+            1,
+            8100,
+            8112
+          ],
+          [
+            "LINKUSDT",
+            "2026-05-23T18:00:00+00:00",
+            -1,
+            11268,
+            11969
+          ],
+          [
+            "TRXUSDT",
+            "2026-03-01T20:00:00+00:00",
+            -1,
+            7288,
+            7416
+          ],
+          [
+            "XRPUSDT",
+            "2026-01-05T11:30:00+00:00",
+            1,
+            4631,
+            4689
+          ]
+        ],
+        [
+          [
+            "AVAXUSDT",
+            "2026-01-19T18:00:00+00:00",
+            -1,
+            5316,
+            5646
+          ],
+          [
+            "AVAXUSDT",
+            "2026-02-26T20:30:00+00:00",
+            1,
+            7145,
+            7179
+          ],
+          [
+            "AVAXUSDT",
+            "2026-03-10T10:30:00+00:00",
+            1,
+            7701,
+            7883
+          ],
+          [
+            "BTCUSDT",
+            "2026-03-03T22:00:00+00:00",
+            1,
+            7388,
+            7513
+          ],
+          [
+            "ETHUSDT",
+            "2026-01-24T14:00:00+00:00",
+            -1,
+            5548,
+            5632
+          ],
+          [
+            "ETHUSDT",
+            "2026-03-26T23:30:00+00:00",
+            1,
+            8495,
+            8496
+          ],
+          [
+            "ETHUSDT",
+            "2026-04-09T16:00:00+00:00",
+            1,
+            9152,
+            9267
+          ],
+          [
+            "LINKUSDT",
+            "2026-01-26T06:30:00+00:00",
+            -1,
+            5629,
+            5902
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-02T21:30:00+00:00",
+            -1,
+            7339,
+            7344
+          ],
+          [
+            "LINKUSDT",
+            "2026-06-06T17:00:00+00:00",
+            -1,
+            11938,
+            11964
+          ],
+          [
+            "TRXUSDT",
+            "2026-02-01T20:30:00+00:00",
+            -1,
+            5945,
+            6200
+          ],
+          [
+            "XRPUSDT",
+            "2026-04-08T08:00:00+00:00",
+            1,
+            9088,
+            9312
+          ]
+        ],
+        [
+          [
+            "AVAXUSDT",
+            "2026-05-18T05:00:00+00:00",
+            -1,
+            11002,
+            11152
+          ],
+          [
+            "AVAXUSDT",
+            "2026-05-30T06:00:00+00:00",
+            -1,
+            11580,
+            11699
+          ],
+          [
+            "AVAXUSDT",
+            "2026-06-30T16:00:00+00:00",
+            1,
+            13088,
+            13103
+          ],
+          [
+            "BTCUSDT",
+            "2026-01-05T13:00:00+00:00",
+            1,
+            4634,
+            4764
+          ],
+          [
+            "ETHUSDT",
+            "2026-01-05T14:30:00+00:00",
+            1,
+            4637,
+            4733
+          ],
+          [
+            "ETHUSDT",
+            "2026-03-16T04:00:00+00:00",
+            1,
+            7976,
+            8160
+          ],
+          [
+            "ETHUSDT",
+            "2026-05-18T22:30:00+00:00",
+            -1,
+            11037,
+            11273
+          ],
+          [
+            "LINKUSDT",
+            "2026-04-08T00:00:00+00:00",
+            1,
+            9072,
+            9120
+          ],
+          [
+            "LINKUSDT",
+            "2026-04-22T11:00:00+00:00",
+            1,
+            9766,
+            9799
+          ],
+          [
+            "LINKUSDT",
+            "2026-06-06T08:00:00+00:00",
+            -1,
+            11920,
+            11970
+          ],
+          [
+            "TRXUSDT",
+            "2026-06-26T20:30:00+00:00",
+            -1,
+            12905,
+            13103
+          ],
+          [
+            "XRPUSDT",
+            "2026-03-25T16:30:00+00:00",
+            -1,
+            8433,
+            8645
+          ]
+        ],
+        [
+          [
+            "AVAXUSDT",
+            "2026-03-08T21:30:00+00:00",
+            -1,
+            7627,
+            7643
+          ],
+          [
+            "AVAXUSDT",
+            "2026-04-19T01:00:00+00:00",
+            -1,
+            9602,
+            9744
+          ],
+          [
+            "AVAXUSDT",
+            "2026-06-03T23:00:00+00:00",
+            -1,
+            11806,
+            12254
+          ],
+          [
+            "BTCUSDT",
+            "2026-03-13T17:00:00+00:00",
+            1,
+            7858,
+            8087
+          ],
+          [
+            "ETHUSDT",
+            "2026-01-05T14:30:00+00:00",
+            1,
+            4637,
+            4733
+          ],
+          [
+            "ETHUSDT",
+            "2026-01-21T19:30:00+00:00",
+            -1,
+            5415,
+            5506
+          ],
+          [
+            "ETHUSDT",
+            "2026-05-28T17:00:00+00:00",
+            -1,
+            11506,
+            11996
+          ],
+          [
+            "LINKUSDT",
+            "2026-01-07T11:00:00+00:00",
+            1,
+            4726,
+            4734
+          ],
+          [
+            "LINKUSDT",
+            "2026-02-06T11:30:00+00:00",
+            -1,
+            6167,
+            6864
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-29T12:30:00+00:00",
+            -1,
+            8617,
+            8640
+          ],
+          [
+            "TRXUSDT",
+            "2026-03-19T15:00:00+00:00",
+            1,
+            8142,
+            8309
+          ],
+          [
+            "XRPUSDT",
+            "2026-01-13T08:30:00+00:00",
+            -1,
+            5009,
+            5031
+          ]
+        ],
+        [
+          [
+            "AVAXUSDT",
+            "2026-01-19T13:00:00+00:00",
+            -1,
+            5306,
+            5646
+          ],
+          [
+            "AVAXUSDT",
+            "2026-03-09T09:00:00+00:00",
+            -1,
+            7650,
+            7670
+          ],
+          [
+            "AVAXUSDT",
+            "2026-05-01T23:00:00+00:00",
+            -1,
+            10222,
+            10326
+          ],
+          [
+            "BTCUSDT",
+            "2026-04-23T18:30:00+00:00",
+            1,
+            9829,
+            10058
+          ],
+          [
+            "ETHUSDT",
+            "2026-02-03T15:00:00+00:00",
+            -1,
+            6030,
+            6178
+          ],
+          [
+            "ETHUSDT",
+            "2026-03-18T10:30:00+00:00",
+            1,
+            8085,
+            8087
+          ],
+          [
+            "ETHUSDT",
+            "2026-04-20T04:30:00+00:00",
+            -1,
+            9657,
+            9749
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-04T22:30:00+00:00",
+            -1,
+            7437,
+            7440
+          ],
+          [
+            "LINKUSDT",
+            "2026-05-05T18:00:00+00:00",
+            1,
+            10404,
+            10516
+          ],
+          [
+            "LINKUSDT",
+            "2026-06-19T00:00:00+00:00",
+            -1,
+            12528,
+            12621
+          ],
+          [
+            "TRXUSDT",
+            "2026-03-29T00:00:00+00:00",
+            1,
+            8592,
+            9525
+          ],
+          [
+            "XRPUSDT",
+            "2026-06-24T00:30:00+00:00",
+            -1,
+            12769,
+            12942
+          ]
+        ],
+        [
+          [
+            "AVAXUSDT",
+            "2026-01-14T12:30:00+00:00",
+            1,
+            5065,
+            5136
+          ],
+          [
+            "AVAXUSDT",
+            "2026-03-16T16:30:00+00:00",
+            1,
+            8001,
+            8093
+          ],
+          [
+            "AVAXUSDT",
+            "2026-04-08T23:00:00+00:00",
+            1,
+            9118,
+            9120
+          ],
+          [
+            "BTCUSDT",
+            "2026-03-23T16:30:00+00:00",
+            -1,
+            8337,
+            8352
+          ],
+          [
+            "ETHUSDT",
+            "2026-03-17T08:00:00+00:00",
+            1,
+            8032,
+            8093
+          ],
+          [
+            "ETHUSDT",
+            "2026-04-16T05:00:00+00:00",
+            1,
+            9466,
+            9484
+          ],
+          [
+            "ETHUSDT",
+            "2026-05-05T07:30:00+00:00",
+            1,
+            10383,
+            10493
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-04T05:30:00+00:00",
+            -1,
+            7403,
+            7409
+          ],
+          [
+            "LINKUSDT",
+            "2026-06-04T23:00:00+00:00",
+            -1,
+            11854,
+            11969
+          ],
+          [
+            "LINKUSDT",
+            "2026-06-19T03:00:00+00:00",
+            -1,
+            12534,
+            13042
+          ],
+          [
+            "TRXUSDT",
+            "2026-01-03T16:30:00+00:00",
+            1,
+            4545,
+            4957
+          ],
+          [
+            "XRPUSDT",
+            "2026-04-16T13:30:00+00:00",
+            1,
+            9483,
+            9573
+          ]
+        ],
+        [
+          [
+            "AVAXUSDT",
+            "2026-01-06T19:30:00+00:00",
+            1,
+            4695,
+            4766
+          ],
+          [
+            "AVAXUSDT",
+            "2026-04-13T07:30:00+00:00",
+            -1,
+            9327,
+            9339
+          ],
+          [
+            "AVAXUSDT",
+            "2026-04-29T16:00:00+00:00",
+            -1,
+            10112,
+            10395
+          ],
+          [
+            "BTCUSDT",
+            "2026-04-11T12:00:00+00:00",
+            1,
+            9240,
+            9267
+          ],
+          [
+            "ETHUSDT",
+            "2026-03-24T21:30:00+00:00",
+            1,
+            8395,
+            8467
+          ],
+          [
+            "ETHUSDT",
+            "2026-04-03T01:30:00+00:00",
+            -1,
+            8835,
+            8976
+          ],
+          [
+            "ETHUSDT",
+            "2026-04-11T18:30:00+00:00",
+            1,
+            9253,
+            9267
+          ],
+          [
+            "LINKUSDT",
+            "2026-01-15T06:00:00+00:00",
+            1,
+            5100,
+            5119
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-13T07:00:00+00:00",
+            1,
+            7838,
+            8087
+          ],
+          [
+            "LINKUSDT",
+            "2026-06-24T04:00:00+00:00",
+            -1,
+            12776,
+            13042
+          ],
+          [
+            "TRXUSDT",
+            "2026-05-26T02:00:00+00:00",
+            1,
+            11380,
+            11484
+          ],
+          [
+            "XRPUSDT",
+            "2026-06-04T00:00:00+00:00",
+            -1,
+            11808,
+            11969
+          ]
+        ],
+        [
+          [
+            "AVAXUSDT",
+            "2026-01-03T00:30:00+00:00",
+            1,
+            4513,
+            4992
+          ],
+          [
+            "AVAXUSDT",
+            "2026-03-12T08:30:00+00:00",
+            1,
+            7793,
+            7883
+          ],
+          [
+            "AVAXUSDT",
+            "2026-05-19T12:30:00+00:00",
+            -1,
+            11065,
+            11123
+          ],
+          [
+            "BTCUSDT",
+            "2026-05-03T21:00:00+00:00",
+            1,
+            10314,
+            10340
+          ],
+          [
+            "ETHUSDT",
+            "2026-01-26T01:00:00+00:00",
+            -1,
+            5618,
+            5696
+          ],
+          [
+            "ETHUSDT",
+            "2026-01-30T03:00:00+00:00",
+            -1,
+            5814,
+            6178
+          ],
+          [
+            "ETHUSDT",
+            "2026-05-15T05:30:00+00:00",
+            -1,
+            10859,
+            11273
+          ],
+          [
+            "LINKUSDT",
+            "2026-01-26T16:00:00+00:00",
+            -1,
+            5648,
+            5902
+          ],
+          [
+            "LINKUSDT",
+            "2026-01-31T19:00:00+00:00",
+            -1,
+            5894,
+            6170
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-17T21:30:00+00:00",
+            1,
+            8059,
+            8087
+          ],
+          [
+            "TRXUSDT",
+            "2026-03-14T23:00:00+00:00",
+            1,
+            7918,
+            8077
+          ],
+          [
+            "XRPUSDT",
+            "2026-03-29T06:00:00+00:00",
+            -1,
+            8604,
+            8640
+          ]
+        ],
+        [
+          [
+            "AVAXUSDT",
+            "2026-01-03T05:00:00+00:00",
+            1,
+            4522,
+            4992
+          ],
+          [
+            "AVAXUSDT",
+            "2026-01-22T03:00:00+00:00",
+            -1,
+            5430,
+            5646
+          ],
+          [
+            "AVAXUSDT",
+            "2026-02-24T03:00:00+00:00",
+            -1,
+            7014,
+            7080
+          ],
+          [
+            "BTCUSDT",
+            "2026-04-16T17:30:00+00:00",
+            1,
+            9491,
+            9600
+          ],
+          [
+            "ETHUSDT",
+            "2026-01-24T11:30:00+00:00",
+            -1,
+            5543,
+            5632
+          ],
+          [
+            "ETHUSDT",
+            "2026-06-24T07:00:00+00:00",
+            -1,
+            12782,
+            12829
+          ],
+          [
+            "ETHUSDT",
+            "2026-06-29T21:30:00+00:00",
+            -1,
+            13051,
+            13103
+          ],
+          [
+            "LINKUSDT",
+            "2026-01-31T22:30:00+00:00",
+            -1,
+            5901,
+            6170
+          ],
+          [
+            "LINKUSDT",
+            "2026-03-11T05:30:00+00:00",
+            1,
+            7739,
+            7759
+          ],
+          [
+            "LINKUSDT",
+            "2026-06-23T11:30:00+00:00",
+            -1,
+            12743,
+            13103
+          ],
+          [
+            "TRXUSDT",
+            "2026-03-09T01:30:00+00:00",
+            1,
+            7635,
+            7653
+          ],
+          [
+            "XRPUSDT",
+            "2026-06-02T03:30:00+00:00",
+            -1,
+            11719,
+            11969
+          ]
+        ]
+      ],
+      "per_seed_trade_counts": [
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        },
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        },
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        },
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        },
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        },
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        },
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        },
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        },
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        },
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        },
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        },
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        },
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        },
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        },
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        },
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        },
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        },
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        },
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        },
+        {
+          "ADAUSDT": 0,
+          "AVAXUSDT": 3,
+          "BNBUSDT": 0,
+          "BTCUSDT": 1,
+          "DOGEUSDT": 0,
+          "ETHUSDT": 3,
+          "LINKUSDT": 3,
+          "SOLUSDT": 0,
+          "TRXUSDT": 1,
+          "XRPUSDT": 1
+        }
+      ],
+      "e_r_mean": -0.04470038790555163,
+      "e_r_min": -0.7488044549898852,
+      "e_r_median": -0.19027473877804346,
+      "e_r_max": 0.4575315722859419,
+      "share_ge_strategy": 0.95,
+      "strategy_e_r": -0.5249011563594023,
+      "roi_mean": -0.0043620028686799095,
+      "roi_min": -0.07953147142871164,
+      "roi_median": -0.018947664933291086,
+      "roi_max": 0.05578665301427055,
+      "share_roi_ge_strategy": 0.95,
+      "strategy_roi": -0.0614335628905488,
+      "max_drawdown_equity_mean": 0.03799093341027054
+    }
+  },
+  "runtime_s": 22.416031999979168,
+  "git_head": "005b034"
+}

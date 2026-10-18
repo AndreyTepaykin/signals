@@ -323,3 +323,41 @@ None.
 - `PartExit.r` is filled in `simulate_trade` (the walk does not see funding).
 - Exits sharing a timestamp are ordered by coin, fill index, part index; final equity does not depend on it, the drawdown path can.
 - A censored trade counts as open until the window end in the open-trade average.
+
+## E6 - LLM tuning (v2 rules)
+
+- Date: 2026-10-18
+- Model: Claude Fable 5.1 thinking high (tuner, one resumed subagent; read only `trials.jsonl`, `train_*.md` and `params_space.json`), Claude Opus 5.5 (ran each trial, checked the protocol)
+
+### Files created or modified
+- `repo/api/research_out/elder/trials.jsonl` - 5 train trials, chain intact.
+- `repo/api/research_out/elder/train_00{1..5}_*.json/.md` - one report per trial.
+- `repo/api/research_out/elder/proposals/trial_00{2..5}.json` - the tuner's proposals as run.
+- `repo/api/research_out/elder/frozen.json` - trial 2.
+
+### Contracts frozen
+- `frozen.json` = trial 2 (`params_hash` prefix `a7fad8ae`): `tide_mode` both, `wave_osc` force2, `wave_threshold` 1.0, `wave_block_impulse` true, `ripple_expiry_bars` 4, `stop_lookback_bars` 6, `stop_atr_buffer` 0.5, `min_stop_atr` 1.0, `t1_r` 1.5, `t1_share` 0.5, `be_after_t1` false, `trail_atr` 3.0.
+
+### Results
+
+| Trial | Change | Objective | ROI (90%) | Max DD | Closed | Trades/wk | P(T1) | E[R] |
+|---|---|---:|---|---:|---:|---:|---:|---:|
+| 1 | defaults | infeasible | -48.1% [-83.2, +184.9] | 75.3% | 505 | 19.6 | 0.38 | -0.074 |
+| 2 | force2 threshold 1.0, wider stops (6 bars, 0.5 ATR, floor 1 ATR), no BE | **-0.071** | +3.0% [-7.1, +14.0] | 3.4% | 27 | 1.0 | 0.48 | +0.118 |
+| 3 | as 2, threshold 0.5 | infeasible | +11.2% [-21.0, +86.9] | 20.8% | 121 | 4.7 | 0.43 | +0.133 |
+| 4 | as 3, 70% at 1R, BE on | -0.177 | +10.2% [-17.7, +63.3] | 17.4% | 126 | 4.9 | 0.53 | +0.100 |
+| 5 | as 4, elder_ray threshold 1.0 | -0.102 | -6.1% [-10.2, -2.1] | 6.1% | 12 | 0.5 | 0.08 | -0.525 |
+
+- Stopped after trial 5: trials 3, 4 and 5 in a row did not beat trial 2's objective. 5 of 20 trials used.
+- Trial 2 by sub-window: Jan-Apr ROI +0.1% (17 trades, E[R] +0.01), May-Jun +2.8% (10 trades, E[R] +0.30). `random_tide` mean ROI +0.7%; 45% of seeds reach the strategy's ROI, so trial 2 is not distinguishable from random entries with the tide.
+- Trials 3 and 4 beat `random_tide` clearly (15% and 10% of seeds reach their ROI), but their wider ROI intervals give a worse lower bound; trial 3 also broke the 20% drawdown limit.
+- No trial has a positive ROI lower bound. The best objective is negative.
+
+### Deferred to a later milestone
+- Holdout run with `frozen.json`, once -> E7 (owner to confirm, given the result above).
+
+### Deviations from the plan
+- While no trial was feasible, trials were to be ranked by drawdown then ROI; trial 2 was feasible, so the objective decided from trial 2 on.
+
+**Ambiguities**
+- Tuner reasoning (trials 3-5): with E[R] about 0.1R and per-trade spread about 1R, the week-bootstrap 5th percentile of ROI stays negative at any trade frequency; trading less only narrows the interval around zero, which is why the 27-trade trial wins the objective.
